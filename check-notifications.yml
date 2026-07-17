@@ -1,0 +1,30 @@
+name: Check Mind Stretcher Notifications
+
+on:
+  schedule:
+    # Runs every 5 minutes. GitHub may delay this slightly under load.
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {} # lets you manually trigger a run from the Actions tab, for testing
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Check notifications and alert if new
+        env:
+          MS_COOKIE: ${{ secrets.MS_COOKIE }}
+          TELE_BOT_TOKEN: ${{ secrets.TELE_BOT_TOKEN }}
+          TELE_CHAT_ID: ${{ secrets.TELE_CHAT_ID }}
+        run: |
+          python3 check_notifications.py
+
+      - name: Commit updated state
+        run: |
+          git config user.name "notify-bot"
+          git config user.email "notify-bot@users.noreply.github.com"
+          git add last_count.txt
+          git diff --quiet --cached || git commit -m "Update last known notification count"
+          git push
