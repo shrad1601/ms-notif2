@@ -5,6 +5,7 @@ import urllib.request
 import urllib.parse
 
 STATE_FILE = "last_count.txt"
+FAIL_STATE_FILE = "last_fail_alerted.txt"
 NOTIF_URL = "https://dash.mindstretcher.com/notifications/popup/"
 
 
@@ -35,7 +36,6 @@ def fetch_unread_count(cookie):
         print("First 500 chars of response for debugging:")
         print(body[:500])
         return None
-
     return int(match.group(1))
 
 
@@ -52,6 +52,20 @@ def write_last_count(count):
         f.write(str(count))
 
 
+def already_alerted():
+    return os.path.exists(FAIL_STATE_FILE)
+
+
+def mark_alerted():
+    with open(FAIL_STATE_FILE, "w") as f:
+        f.write("1")
+
+
+def clear_alerted():
+    if os.path.exists(FAIL_STATE_FILE):
+        os.remove(FAIL_STATE_FILE)
+
+
 def send_telegram(token, chat_id, text):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
@@ -66,11 +80,22 @@ def main():
     chat_id = get_env("TELE_CHAT_ID")
 
     current_count = fetch_unread_count(cookie)
+
     if current_count is None:
-        # Could mean the cookie expired (logged out) or the page structure changed.
-        # Don't crash the whole workflow, just log and exit cleanly.
-        print("Could not determine unread count this run. Skipping.")
+        print("Could not determine unread count this run.")
+        # Only alert once per failure streak, not every single run
+        if not already_alerted():
+            send_telegram(
+                bot_token,
+                chat_id,
+                "⚠️ Mind Stretcher notify bot: couldn't read unread count. "
+                "Cookie may have expired — please refresh MS_COOKIE secret.",
+            )
+            mark_alerted()
         return
+
+    # Success this run -> reset the failure-alert flag so future failures alert again
+    clear_alerted()
 
     last_count = read_last_count()
     print(f"Last known count: {last_count} | Current count: {current_count}")
