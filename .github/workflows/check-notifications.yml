@@ -26,6 +26,7 @@ jobs:
         run: |
           git config user.name "notify-bot"
           git config user.email "notify-bot@users.noreply.github.com"
-          git add last_count.txt last_fail_alerted.txt
+          git add last_count.txt
+          git add last_fail_alerted.txt 2>/dev/null || true
           git diff --quiet --cached || git commit -m "Update last known notification count"
           git push
