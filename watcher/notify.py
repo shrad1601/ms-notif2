@@ -354,9 +354,9 @@ class Telegram:
         self.api = f"https://api.telegram.org/bot{token}/"
         self.chat_id = str(chat_id)
 
-    def _call(self, method: str, timeout: int = 20, **payload):
+    def _call(self, method: str, payload: dict, http_timeout: int = 20):
         try:
-            r = requests.post(self.api + method, json=payload, timeout=timeout)
+            r = requests.post(self.api + method, json=payload, timeout=http_timeout)
         except requests.RequestException as exc:
             print(f"telegram {method}: {exc.__class__.__name__}")
             return None
@@ -373,21 +373,22 @@ class Telegram:
             payload["reply_markup"] = {"inline_keyboard": keyboard}
         if reply_to:
             payload["reply_parameters"] = {"message_id": reply_to, "allow_sending_without_reply": True}
-        result = self._call("sendMessage", **payload)
+        result = self._call("sendMessage", payload)
         return result.get("message_id") if result else None
 
     def edit_keyboard(self, message_id: int, keyboard: list) -> None:
-        self._call("editMessageReplyMarkup", chat_id=self.chat_id, message_id=message_id,
-                   reply_markup={"inline_keyboard": keyboard})
+        self._call("editMessageReplyMarkup", {"chat_id": self.chat_id, "message_id": message_id,
+                                              "reply_markup": {"inline_keyboard": keyboard}})
 
     def answer(self, callback_id: str, text: str) -> None:
-        self._call("answerCallbackQuery", callback_query_id=callback_id, text=text)
+        self._call("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
 
     def updates(self, offset: int | None, timeout: int) -> list[dict]:
+        """Long-poll: Telegram holds the request open for up to `timeout` seconds waiting for taps."""
         payload = {"timeout": timeout, "allowed_updates": ["callback_query"]}
         if offset is not None:
             payload["offset"] = offset
-        return self._call("getUpdates", timeout=timeout + 15, **payload) or []
+        return self._call("getUpdates", payload, http_timeout=timeout + 15) or []
 
 
 class Recorder:
