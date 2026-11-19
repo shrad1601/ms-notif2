@@ -80,7 +80,8 @@ class Watcher:
                 lessons, complete = relief_full(self.client, pages, page1)
                 found = apply_scan(st, "relief", lessons, complete, now)
                 new += found
-                log.append(f"full {pages}p lessons={len(lessons)} new={len(found)}"
+                classes = len({les.class_code for les in lessons})
+                log.append(f"full {pages}p classes={classes} lessons={len(lessons)} new={len(found)}"
                            + ("" if complete else " INCOMPLETE"))
             st["relief_total"] = total
 
@@ -88,7 +89,8 @@ class Watcher:
                 lessons, complete = makeup_full(self.client)
                 found = apply_scan(st, "makeup", lessons, complete, now)
                 new += found
-                log.append(f"| makeup lessons={len(lessons)} new={len(found)}"
+                classes = len({les.class_code for les in lessons})
+                log.append(f"| makeup classes={classes} lessons={len(lessons)} new={len(found)}"
                            + ("" if complete else " INCOMPLETE"))
 
             if failing_since:
