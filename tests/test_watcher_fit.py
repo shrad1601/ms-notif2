@@ -54,10 +54,40 @@ def test_baseline_sends_backlog_once():
     run(w, site, T0)
     msgs = texts(rec)
     assert "now watching" in msgs[0]
-    assert "📋" in msgs[1] and "4 open classes fit" in msgs[1]
+    assert msgs[1].startswith("📋 <b>Relief: 2 classes fit your schedule</b>")
+    assert msgs[2].startswith("📋 <b>Holiday Make-Up: 2 classes fit your schedule</b>")
     assert store.state["backlog_sent"]
     run(w, site, T0 + timedelta(minutes=61))
-    assert len(rec.sent) == 2
+    assert len(rec.sent) == 3
+
+
+def test_backlog_layout_groups_by_date_and_centre_and_finds_back_to_back():
+    site = ScheduleSite()
+    site.makeup = [[
+        ("HMU-A", "P3 English", "Centre S", "17 Dec 2026 10:00 AM–17 Dec 2026 12:00 PM"),
+        ("HMU-B", "P5 Science", "Centre S", "17 Dec 2026 12:45 PM–17 Dec 2026 02:45 PM"),
+        ("HMU-C", "P2 Maths", "Centre T", "17 Dec 2026 10:00 AM–17 Dec 2026 12:00 PM"),
+    ]]
+    w, rec, _ = make(site, FakeCalendar())
+    run(w, site, T0)
+    makeup_msg = next(t for t in texts(rec) if t.startswith("📋 <b>Holiday Make-Up"))
+    assert "<b>🔗 Back-to-back options</b>" in makeup_msg
+    assert "• Thu 17 Dec · Centre S: 10:00am → 12:45pm (2 classes to pick from)" in makeup_msg
+    day = makeup_msg[makeup_msg.index("<b>Thu 17 Dec</b>"):]
+    blocks = {b.split("\n", 1)[0]: b for b in day.split("📍 ")[1:]}
+    assert "• 10:00am–12:00pm · P3 English 🔗\n• 12:45–2:45pm · P5 Science 🔗" in blocks["Centre S"]
+    assert "• 10:00am–12:00pm · P2 Maths\n" in blocks["Centre T"]
+
+
+def test_backlog_skips_days_blocked_by_an_all_day_trip():
+    site = ScheduleSite()
+    trip = Event("Trip", datetime(2026, 12, 13), datetime(2026, 12, 20), all_day=True, free=True)
+    w, rec, _ = make(site, FakeCalendar([trip]))
+    run(w, site, T0)
+    msgs = texts(rec)
+    assert not any(t.startswith("📋 <b>Holiday Make-Up") for t in msgs)  # both make-ups are 14/15 Dec
+    relief = next(t for t in msgs if t.startswith("📋 <b>Relief"))
+    assert "Sun 6 Dec" in relief and "Sat 12 Dec" in relief
 
 
 def test_new_class_with_one_clashing_week_is_starred():

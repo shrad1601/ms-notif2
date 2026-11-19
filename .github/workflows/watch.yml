@@ -17,6 +17,10 @@ on:
         description: 'Do a full scan on the first check'
         type: boolean
         default: false
+      resend_backlog:
+        description: "Send the 'open classes that fit' list again"
+        type: boolean
+        default: false
 
 concurrency:
   group: ms-watch
@@ -47,4 +51,5 @@ jobs:
           LOOP_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.loop_minutes || '54' }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '--dry-run' || '' }}
           FORCE_FULL: ${{ github.event_name == 'workflow_dispatch' && inputs.force_full && '--force-full' || '' }}
-        run: python -m watcher --loop-minutes "$LOOP_MINUTES" $DRY_RUN $FORCE_FULL
+          RESEND_BACKLOG: ${{ github.event_name == 'workflow_dispatch' && inputs.resend_backlog && '--resend-backlog' || '' }}
+        run: python -m watcher --loop-minutes "$LOOP_MINUTES" $DRY_RUN $FORCE_FULL $RESEND_BACKLOG

@@ -7,7 +7,7 @@ import requests
 
 from .core import NewItem, pending_weeks
 from .fetch import MAKEUP_URL, RELIEF_URL
-from .fit import Fit
+from .fit import Config, Fit, b2b_limit
 from .parse import Lesson
 
 SGT = timezone(timedelta(hours=8))
@@ -91,7 +91,8 @@ def _lesson_line(item: NewItem, fit: Fit | None) -> list[str]:
     if not fit.ok:
         return [f"❌ {_when(les.start, les.end)}{_week(les)}{tags} — {e(fit.reason or '')}"]
     lines = [f"✅ {_when(les.start, les.end)}{_week(les)}{' 🔗' if fit.back_to_back else ''}{tags}"]
-    lines += [f"      {e(flag)}" for flag in fit.flags]
+    lines += [f"    ↳ 🔗 back-to-back {e(w)}" for w in fit.b2b_with[:1]]
+    lines += [f"    ↳ <i>{e(flag)}</i>" for flag in fit.flags]
     return lines
 
 
@@ -162,7 +163,8 @@ def format_alerts(alerts: list[ClassAlert]) -> list[str]:
         return []
     if alerts[0].fits is None:
         return _pack([class_block(a) for a in alerts], {a.first.kind for a in alerts})
-    starred = sorted((a for a in alerts if a.starred), key=lambda a: (a.rank, a.first.start))
+    starred = sorted((a for a in alerts if a.starred),
+                     key=lambda a: (a.rank, not any(f.back_to_back for f in a.fits or []), a.first.start))
     rest = [a for a in alerts if not a.starred]
     messages = []
     for a in starred:
@@ -179,24 +181,108 @@ def format_new(items: list[NewItem], state: dict) -> list[str]:
     return format_alerts(group_new(items, state))
 
 
-def format_backlog(alerts: list[ClassAlert]) -> list[str]:
-    starred = sorted((a for a in alerts if a.starred), key=lambda a: (a.rank, a.first.start))
+def _range(start: str, end: str) -> str:
+    s, t = datetime.fromisoformat(start), datetime.fromisoformat(end)
+
+    def hm(dt: datetime) -> str:
+        return f"{dt.hour % 12 or 12}:{dt:%M}"
+
+    def ap(dt: datetime) -> str:
+        return "am" if dt.hour < 12 else "pm"
+
+    return f"{hm(s)}–{hm(t)}{ap(t)}" if ap(s) == ap(t) else f"{hm(s)}{ap(s)}–{hm(t)}{ap(t)}"
+
+
+def _short_date(iso: str) -> str:
+    dt = datetime.fromisoformat(iso)
+    return f"{dt.day} {dt:%b}"
+
+
+@dataclass
+class _Entry:
+    alert: ClassAlert
+    oks: list[tuple[Lesson, Fit]]  # weeks that fit, soonest first
+    linked: bool = False  # back-to-back with another open lesson in this list
+
+    @property
+    def lesson(self) -> Lesson:
+        return self.oks[0][0]
+
+    @property
+    def fit(self) -> Fit:
+        return self.oks[0][1]
+
+
+def _backlog_section(alerts: list[ClassAlert], title: str, kind: str, cfg: Config) -> list[str]:
+    entries = []
+    for a in alerts:
+        oks = [(i.lesson, f) for i, f in zip(a.items, a.fits or []) if f.ok]
+        if oks:
+            entries.append(_Entry(a, oks))
+
+    by_day: dict[str, dict[str, list[_Entry]]] = {}
+    for en in sorted(entries, key=lambda en: (en.lesson.start[:10], en.lesson.centre, en.lesson.start,
+                                              en.lesson.class_name)):
+        by_day.setdefault(en.lesson.start[:10], {}).setdefault(en.lesson.centre, []).append(en)
+
+    b2b_lines = []
+    for day, centres in by_day.items():
+        for centre, group in centres.items():
+            times = set()
+            for x in group:
+                for y in group:
+                    xs, xe = datetime.fromisoformat(x.lesson.start), datetime.fromisoformat(x.lesson.end)
+                    ys = datetime.fromisoformat(y.lesson.start)
+                    if xe <= ys and (ys - xe).total_seconds() / 60 <= b2b_limit(xs, kind, cfg):
+                        x.linked = y.linked = True
+                        times |= {x.lesson.start, y.lesson.start}
+            if times:
+                n = sum(en.linked for en in group)
+                chain = " → ".join(_time(t) for t in sorted(times))
+                b2b_lines.append(f"• {_day(day)} · {e(centre)}: {chain} ({n} classes to pick from)")
+            for en in group:
+                if en.fit.b2b_with:
+                    b2b_lines.append(f"• {_day(day)} · {e(centre)}: {_time(en.lesson.start)} "
+                                     f"{e(en.alert.first.class_name)}, {e(en.fit.b2b_with[0])}")
+
+    blocks = []
+    if b2b_lines:
+        blocks.append("<b>🔗 Back-to-back options</b>\n" + "\n".join(b2b_lines))
+    for day, centres in by_day.items():
+        lines = [f"<b>{_day(day)}</b>"]
+        for centre, group in centres.items():
+            lines.append(f"📍 {e(centre)}")
+            for en in group:
+                a = en.alert
+                marks = "🔁 " if (a.taught or a.pending) else ""
+                weeks = ""
+                if len(a.items) > 1:
+                    n_ok, n_all = len(en.oks), len(a.items)
+                    weeks = f" · all {n_all} weeks" if n_ok == n_all else f" · {n_ok} of {n_all} weeks"
+                    if len(en.oks) > 1:
+                        weeks += f" (also {', '.join(_short_date(les.start) for les, _ in en.oks[1:])})"
+                b2b = " 🔗" if (en.linked or en.fit.back_to_back) else ""
+                lines.append(f"• {_range(en.lesson.start, en.lesson.end)} · {marks}{e(a.first.class_name)}{weeks}{b2b}")
+                flags = list(dict.fromkeys(flag for _, f in en.oks for flag in f.flags))
+                lines += [f"    ↳ <i>{e(flag)}</i>" for flag in flags]
+        blocks.append("\n".join(lines))
+
+    n = len(entries)
+    header = (f"📋 <b>{title}: {n} class{'es' if n != 1 else ''} fit your schedule</b>\n"
+              f"<i>Open and not bid on yet · 🔗 back-to-back · 🔁 covered before · ⚠️ check the note</i>")
+    return _pack(blocks, {kind}, header=header)
+
+
+def format_backlog(alerts: list[ClassAlert], cfg: Config) -> list[str]:
+    starred = [a for a in alerts if a.starred]
     if not starred:
         return ["📋 Checked every open class against your calendar: nothing fits right now."]
-    lines = []
-    for a in starred:
-        first = a.first
-        ok = [item.lesson for item, f in zip(a.items, a.fits or []) if f.ok]
-        flagged = any(f.flags for f in a.fits or [] if f.ok)
-        dates = ", ".join(f"{datetime.fromisoformat(les.start).day} {datetime.fromisoformat(les.start):%b}" for les in ok)
-        marks = "⭐" + ("🔁" if a.taught else "")
-        lines.append(f"{marks} {_label(first.kind)} · {e(first.class_name)} · {e(first.centre)} · "
-                     f"{datetime.fromisoformat(first.start):%a} {_time(first.start)} · "
-                     f"{len(ok)}/{len(a.items)}: {dates}{' ⚠️' if flagged else ''}")
-    header = (f"📋 <b>{len(starred)} open classes fit your schedule</b> (lessons you haven't bid on yet, best first; "
-              f"⚠️ = something nearby to check):")
-    return _pack(["\n".join(lines[i:i + 30]) for i in range(0, len(lines), 30)],
-                 {a.first.kind for a in starred}, header=header)
+    out = []
+    for kind, title in (("relief", "Relief"), ("makeup", "Holiday Make-Up")):
+        group = [a for a in starred if a.first.kind == kind]
+        if group:
+            out += _backlog_section(group, title, kind, cfg)
+    return out
 
 
 class Telegram:

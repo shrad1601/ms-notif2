@@ -63,6 +63,17 @@ def test_all_day_busy_blocks_the_day():
     assert not f.ok and "Away" in f.reason and "all day" in f.reason
 
 
+def test_all_day_trip_marked_free_still_blocks():
+    # Google Calendar marks all-day events as "Free" by default
+    trip = ev("Trip", "2026-12-04T00:00", "2026-12-20T00:00", all_day=True, free=True)
+    assert not evaluate(L(*SAT), [trip], CFG).ok
+
+
+def test_multi_day_timed_event_marked_free_still_blocks():
+    trip = ev("Trip", "2026-12-04T08:00", "2026-12-10T20:00", free=True)
+    assert not evaluate(L(*SAT), [trip], CFG).ok
+
+
 def test_nearby_event_elsewhere_is_flagged_with_gap():
     f = evaluate(L(*SAT), [ev("Other job", "2026-12-05T11:00", "2026-12-05T13:30", "Far Mall")], CFG)
     assert f.ok and f.flags == ["⚠️ 30 min after Other job @ Far Mall"]
@@ -73,6 +84,21 @@ def test_nearby_event_elsewhere_is_flagged_with_gap():
 def test_same_centre_back_to_back():
     f = evaluate(L(*SAT), [ev("P4 Maths (Dash)", "2026-12-05T11:45", "2026-12-05T13:45", "Toa Payoh")], CFG)
     assert f.ok and f.back_to_back and not f.flags
+    assert f.b2b_with == ["after P4 Maths (Dash) (11:45am–1:45pm)"]
+
+
+def test_same_place_ignores_mind_stretcher_and_cc_wording():
+    lesson = L(*SAT, centre="Sengkang CC")
+    f = evaluate(lesson, [ev("P2 English", "2026-12-05T11:30", "2026-12-05T13:30", "Mind Stretcher Sengkang")], CFG)
+    assert f.ok and f.back_to_back and not f.flags
+
+
+def test_back_to_back_gap_rules():
+    wed = ("2026-12-02T12:45", "2026-12-02T14:45")
+    before = [ev("Class", "2026-12-02T10:00", "2026-12-02T12:00", "Toa Payoh")]  # 45 min gap
+    assert not evaluate(L(*wed), before, CFG).back_to_back  # weekday relief: 30 min max
+    makeup = Lesson("makeup", "HMU-1", "P3 English", "Toa Payoh", *wed)
+    assert evaluate(makeup, before, CFG).back_to_back  # make-ups: 10am then 12:45pm counts
 
 
 def test_far_away_in_time_is_ignored():

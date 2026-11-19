@@ -40,6 +40,14 @@ class Fit:
     reason: str | None = None  # why it doesn't fit
     flags: list[str] = field(default_factory=list)  # ⚠️ things to judge yourself
     back_to_back: bool = False
+    b2b_with: list[str] = field(default_factory=list)  # e.g. "after P4 English (Dash) (12:45–2:45pm)"
+
+
+def b2b_limit(start: datetime, kind: str, cfg: "Config") -> int:
+    """Max gap (minutes) that still counts as back-to-back. Make-ups use the longer gap (10am then 12:45pm)."""
+    if start.weekday() >= 5 or kind == "makeup":
+        return cfg.back_to_back_weekend
+    return cfg.back_to_back_weekday
 
 
 def _fmt_time(dt: datetime) -> str:
@@ -53,9 +61,26 @@ def _span(ev: Event) -> str:
     return f"{_fmt_time(ev.start)}–{_fmt_time(ev.end)}"
 
 
+_PLACE_NOISE = {"mind", "stretcher", "cc", "mall", "shopping", "centre", "center", "learning", "the", "@", "-"}
+
+
+def _place_words(text: str) -> set[str]:
+    words = {w.strip("(),.") for w in text.lower().split()}
+    return {w for w in words if w and w not in _PLACE_NOISE}
+
+
 def _same_place(location: str, centre: str) -> bool:
-    loc, cen = location.strip().lower(), centre.strip().lower()
-    return bool(loc and cen) and (cen in loc or loc in cen)
+    """'Sengkang CC' and 'Mind Stretcher Sengkang' are the same place."""
+    loc, cen = _place_words(location), _place_words(centre)
+    return bool(loc and cen) and (cen <= loc or loc <= cen)
+
+
+def blocks_time(ev: Event) -> bool:
+    """Free/busy only matters for ordinary timed events: all-day and multi-day events (trips, 'Away')
+    always block, because Google marks all-day events as Free by default."""
+    if ev.all_day or ev.end - ev.start >= timedelta(hours=24):
+        return True
+    return not ev.free
 
 
 def _minutes(td: timedelta) -> int:
@@ -79,10 +104,9 @@ def evaluate(lesson: Lesson, events: list[Event], cfg: Config, pending: list[Les
             return Fit(False, f"ends {_fmt_time(end)}, after your {weekday} limit")
 
     fit = Fit(True)
-    weekend = start.weekday() >= 5
-    b2b_limit = cfg.back_to_back_weekend if weekend else cfg.back_to_back_weekday
+    limit = b2b_limit(start, lesson.kind, cfg)
     for ev in sorted(events, key=lambda e: e.start):
-        if ev.free:
+        if not blocks_time(ev):
             continue
         soft = any(k.lower() in ev.title.lower() for k in cfg.soft_keywords)
         if ev.start < end and ev.end > start:
@@ -100,8 +124,9 @@ def evaluate(lesson: Lesson, events: list[Event], cfg: Config, pending: list[Les
         if mins > cfg.nearby_minutes:
             continue
         if _same_place(ev.location, lesson.centre):
-            if mins <= b2b_limit:
+            if mins <= limit:
                 fit.back_to_back = True
+                fit.b2b_with.append(f"{side} {ev.title} ({_span(ev)})")
             continue
         where = f" @ {ev.location}" if ev.location else ""
         fit.flags.append(f"⚠️ {mins} min {side} {ev.title}{where}")

@@ -134,7 +134,9 @@ class Watcher:
             return []
         alerts = group_new(open_items, self.state)
         self._annotate(alerts)
-        return format_backlog(alerts)
+        starred = [a for a in alerts if a.starred]
+        print(f"backlog: {len(starred)} of {len(alerts)} open classes fit")
+        return format_backlog(alerts, self.cfg)
 
     # ---- one check -----------------------------------------------------------------------
     def check(self, now: datetime | None = None, force_full: bool = False) -> None:
@@ -263,6 +265,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--show-messages", action="store_true", help="print would-be messages (local use only)")
     p.add_argument("--state-file", help="use a local unencrypted state file instead of the state branch")
     p.add_argument("--force-full", action="store_true", help="full scan on the first check")
+    p.add_argument("--resend-backlog", action="store_true", help="send the 'open classes that fit' list again")
     args = p.parse_args(argv)
 
     cookie = os.environ.get("MS_COOKIE", "").strip()
@@ -293,6 +296,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"schedule fit: {'on' if calendar else 'off'}")
 
     watcher = Watcher(Client(cookie), store, notifier, cfg, calendar)
+    if args.resend_backlog:
+        watcher.state.pop("backlog_sent", None)
     end = time.monotonic() + args.loop_minutes * 60
     interval = args.interval_minutes * 60
     first = True
