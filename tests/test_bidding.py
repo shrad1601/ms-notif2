@@ -93,7 +93,9 @@ def test_tap_bids_only_the_fitting_week_and_confirms():
     site = BidSite()
     w, rec, store = setup_starred_class(site, both_weeks_fit=False)
     assert [b[0] for b in buttons(rec)][-2:] == ["✅ Bid", "Skip"]
+    n_before = len(rec.sent)
     tap(w, rec, site, "✅ Bid")
+    assert len(rec.sent) == n_before + 1  # one "⏳ Bidding…" message, edited into the result
     assert [p[0] for p in posts(site)] == [f"/teacher/bulletin/{request_id('CC-1', WK.format(d='26'))}/bid/"]
     assert ("tab", "my-bids") in posts(site)[0][1] and ("category", "relief-cover") in posts(site)[0][1]
     reply = texts(rec)[-1]

@@ -51,5 +51,7 @@ def test_edit_and_answer(calls):
     tg = notify.Telegram("TOKEN", "123")
     tg.edit_keyboard(42, [[{"text": "Skipped", "callback_data": "noop:"}]])
     tg.answer("cb1", "On it")
-    assert [c[0] for c in calls] == ["editMessageReplyMarkup", "answerCallbackQuery"]
+    assert tg.edit_text(43, "✅ <b>Bid placed</b>")
+    assert [c[0] for c in calls] == ["editMessageReplyMarkup", "answerCallbackQuery", "editMessageText"]
     assert calls[1][1] == {"callback_query_id": "cb1", "text": "On it"}
+    assert calls[2][1]["message_id"] == 43 and calls[2][1]["parse_mode"] == "HTML"

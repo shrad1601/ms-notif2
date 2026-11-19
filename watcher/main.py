@@ -142,11 +142,16 @@ class Watcher:
         act["status"] = "bidding"
         self.save()
         self.notifier.answer(cq["id"], "On it: checking Dash and your calendar…")
+        # a visible message straight away, edited into the result once Dash has answered
+        progress = self._send(f"⏳ <b>Bidding</b> on {e(act.get('label', 'this class'))}…\n"
+                              f"<i>Checking the bulletin and your calendar first.</i>",
+                              now, reply_to=act.get("message_id"))
         ok, text = self._do_bid(act, now)
         act["status"] = "done" if ok else "failed"
         act["finished"] = _ts(now)
         print("tap handled")  # logs are public: don't record what was bid on or whether it worked
-        self._send(text, now, reply_to=act.get("message_id"))
+        if progress is None or not self.notifier.edit_text(progress, text):
+            self._send(text, now, reply_to=act.get("message_id"))
         self._mark_button(act, token, ("✅ Bid placed · " if ok else "❌ Not bid · ") + act.get("label", ""))
         self.save()
 
