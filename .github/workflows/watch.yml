@@ -1,0 +1,48 @@
+name: Watch Mind Stretcher bulletin
+
+on:
+  schedule:
+    # Hourly start; each run keeps checking every ~6 min for ~54 min.
+    - cron: '7 * * * *'
+  workflow_dispatch:
+    inputs:
+      loop_minutes:
+        description: 'How long to keep checking (0 = a single check)'
+        default: '54'
+      dry_run:
+        description: "Dry run: don't send Telegram messages or save state"
+        type: boolean
+        default: false
+      force_full:
+        description: 'Do a full scan on the first check'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ms-watch
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # to push the encrypted state branch
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Watch
+        env:
+          MS_COOKIE: ${{ secrets.MS_COOKIE }}
+          TELE_BOT_TOKEN: ${{ secrets.TELE_BOT_TOKEN }}
+          TELE_CHAT_ID: ${{ secrets.TELE_CHAT_ID }}
+          STATE_KEY: ${{ secrets.STATE_KEY }}
+          LOOP_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.loop_minutes || '54' }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '--dry-run' || '' }}
+          FORCE_FULL: ${{ github.event_name == 'workflow_dispatch' && inputs.force_full && '--force-full' || '' }}
+        run: python -m watcher --loop-minutes "$LOOP_MINUTES" $DRY_RUN $FORCE_FULL
