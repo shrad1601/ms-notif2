@@ -28,6 +28,9 @@ def week_url(monday: date) -> str:
 def parse_week(html: str, monday: date) -> list[Assigned]:
     soup = BeautifulSoup(html, "html.parser")
     columns = soup.select(".column-zoom-my-schedule-overview-day")
+    main = soup.select_one("main")
+    if not columns and main is not None and "no classes scheduled for this week" in _text(main).lower():
+        return []  # empty weeks drop the day grid entirely
     if len(columns) != 7:
         raise LayoutChanged(f"expected 7 day columns in my-schedule overview, got {len(columns)}")
     out = []

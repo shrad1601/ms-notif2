@@ -107,6 +107,12 @@ def test_parse_week_and_signature():
     assert signature(out[0].class_name, out[0].centre, out[0].start) == "p4 english (high achiever)|online|Mon|17:15"
 
 
+def test_parse_week_with_no_classes():
+    html = ("<html><body><main><h2>My Class Schedule</h2><p>Selected week · AY2027</p>"
+            "<p>No classes scheduled for this week.</p></main></body></html>")
+    assert parse_week(html, date(2027, 1, 18)) == []
+
+
 def test_parse_week_layout_change():
     with pytest.raises(LayoutChanged):
         parse_week("<html><main>new layout</main></html>", date(2026, 11, 16))
