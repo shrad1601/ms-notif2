@@ -68,6 +68,12 @@ def check_logged_in(html: str, final_url: str = "") -> None:
         raise SessionExpired("got the sign-in page")
 
 
+def csrf_token(html: str) -> str | None:
+    soup = BeautifulSoup(html, "html.parser")
+    field = soup.select_one('input[name="csrfmiddlewaretoken"]')
+    return field.get("value") if field else None
+
+
 def _available_tab(soup):
     tab = soup.select_one("#tab-available")
     if tab is None:

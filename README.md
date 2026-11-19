@@ -67,6 +67,24 @@ When `GCAL_SA_JSON` and `CONFIG_JSON` are set, every new lesson is checked befor
 Groups 1–3 get ⭐ and their own message, with ✅/❌ for each week. Everything else goes into one
 "Also new (standalone, or doesn't fit)" summary, with the reason.
 
+### Tap to bid
+- **Where the buttons are:** ⭐ alerts have **[✅ Bid]** / **[Skip]**, and the ⭐ Best bets lists have one **Bid** button per class.
+  - The label shows what will be bid: "✅ Bid", "✅ Bid 2 fitting wks", or "✅ Bid all 3 wks".
+- **When you tap Bid,** the bot:
+  1. Answers immediately ("On it…").
+  2. Re-reads the bulletin to get the current lesson IDs and confirm each week is still open and not already bid.
+  3. Re-checks your calendar and Dash schedule, and drops any week that no longer fits.
+  4. Submits the same form as Dash's **I'm Interested** button. If every open week on the card is wanted, it uses
+     **Interested in all lessons**, which gives priority.
+  5. Confirms the result. Relief: re-reads the bulletin and checks for **Pending**. Make-up: checks My Bids.
+  6. Replies to the alert with ✅ (and the weeks) or ❌ (and why), and replaces the button with the result.
+- **Only your own taps count:** the tapper must be `TELE_CHAT_ID`. A second tap on the same button does nothing,
+  and nothing is ever bid without a tap.
+- **When taps are picked up:** taps arrive while a run is listening between checks (most of each hour), usually
+  within seconds. A tap made in the short gap between hourly runs waits for the next run.
+- **Logs** only say "tap handled", never what was bid.
+- To undo a bid, use **Withdraw** on Dash as usual.
+
 The first time this is switched on (or when run with `resend_backlog`), you get the **open classes that fit**
 list, one message each for Relief and Holiday Make-Up. ⭐ Best bets come first, then the standalone ones, in date order.
 
@@ -116,7 +134,7 @@ message:
 
 ## Roadmap
 - ~~**Phase 2:** ⭐ schedule fit, 🔁 covered before, ranking, backlog~~ (done, see [Schedule fit](#schedule-fit--))
-- **Phase 3:** tap-to-bid. Telegram **[Bid]** buttons; the bot re-checks the calendar and bids only after my tap.
+- ~~**Phase 3:** tap-to-bid~~ (done, see [Tap to bid](#tap-to-bid))
 - **Phase 4:** track bid timing vs outcome (Accepted/Closed), with weekly stats to tune how often it checks.
 
 ## History: v1 → v2

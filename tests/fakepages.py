@@ -18,7 +18,7 @@ def relief_card(code, name, centre, lessons):
         else:
             rid = _uuid(code + rng)
             open_ids.append(rid)
-            action = f'<form method="post" action="/teacher/bulletin/{rid}/bid/">' \
+            action = f'<form method="post" action="/teacher/bulletin/{rid}/bid/"><input type="hidden" name="csrfmiddlewaretoken" value="TESTTOKEN">' \
                      f'<input type="hidden" name="category" value="relief-cover">' \
                      f'<button type="submit" class="btn-bulletin-bid">I\'m Interested</button></form>'
         rows.append(
@@ -28,7 +28,7 @@ def relief_card(code, name, centre, lessons):
     bid_all = ""
     if len(open_ids) > 1:
         inputs = "".join(f'<input type="hidden" name="assignment_request_ids" value="{i}">' for i in open_ids)
-        bid_all = f'<form method="post" action="/teacher/bulletin/bid-all/" class="card-bulletin-header-action">' \
+        bid_all = f'<form method="post" action="/teacher/bulletin/bid-all/" class="card-bulletin-header-action"><input type="hidden" name="csrfmiddlewaretoken" value="TESTTOKEN">' \
                   f'{inputs}<button type="submit" class="btn-bulletin-bid-all">Interested in all lessons</button></form>'
     return (f'<article class="card-bulletin"><div class="card-bulletin-header"><div class="card-bulletin-title-group">'
             f'<div class="pills-bulletin"><span class="pill-bulletin-assignment">Relief cover</span></div>'
@@ -55,7 +55,7 @@ def makeup_card(code, name, centre, rng, closes="13 Dec 2026 11:59 PM"):
             f'<span class="card-bulletin-permanent-schedule"> {centre} · {rng} </span>'
             f'<span class="card-bulletin-permanent-class-code">Class code: {code}</span></div>'
             f'<span class="card-bulletin-commitment">Interest covers this 1 lesson.</span></div>'
-            f'<form method="post" action="/teacher/bulletin/permanent/{_uuid(code)}/bid/" class="card-bulletin-actions">'
+            f'<form method="post" action="/teacher/bulletin/permanent/{_uuid(code)}/bid/" class="card-bulletin-actions"><input type="hidden" name="csrfmiddlewaretoken" value="TESTTOKEN">'
             f'<button type="submit" class="btn-bulletin-bid">I\'m Interested</button></form></div>'
             f'<div class="card-bulletin-details"><div class="card-bulletin-detail-row">'
             f'<span class="card-bulletin-detail-label">Bidding closes</span><span>{closes}</span></div></div></article>')
@@ -93,3 +93,18 @@ def schedule_week(monday, entries):
 
 
 LOGIN_PAGE ='<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sign in · Enrollment System</title></head><body>login</body></html>'
+
+
+def request_id(code, rng):
+    """The id the fake relief page gives a lesson."""
+    return _uuid(code + rng)
+
+
+def makeup_request_id(code):
+    return _uuid(code)
+
+
+def makeup_my_bids(codes):
+    cards = "".join(f'<article class="card-bulletin"><span class="card-bulletin-permanent-class-code">Class code: {c}</span>'
+                    f'<span class="pill-bulletin-bid-placed">Pending</span></article>' for c in codes)
+    return f"<html><head><title>Bulletin</title></head><body><main>{cards}</main></body></html>"

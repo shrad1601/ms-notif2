@@ -35,6 +35,9 @@ class Client:
             "Accept": "text/html,application/xhtml+xml",
             "Cookie": cookie,
         })
+        # Django accepts the csrftoken cookie value as the form token too; used only if a page has no form
+        self.csrf_cookie = next((part.split("=", 1)[1] for part in cookie.split("; ")
+                                 if part.startswith("csrftoken=")), None)
 
     def get(self, url: str) -> str:
         last_exc: Exception | None = None
@@ -55,13 +58,23 @@ class Client:
             return r.text
         raise last_exc  # type: ignore[misc]
 
+    def post(self, url: str, data: list[tuple[str, str]], referer: str) -> tuple[int, str]:
+        """Submit a Dash form the way the browser does. Never retried: a bid must not go in twice."""
+        self.requests_made += 1
+        r = self.session.post(url, data=data, timeout=self.timeout, allow_redirects=True,
+                              headers={"Referer": referer, "Origin": BASE})
+        check_logged_in(r.text, r.url)
+        return r.status_code, r.text
+
 
 class FixtureClient:
     """Serves saved HTML files instead of hitting the site (offline testing)."""
 
-    def __init__(self, pages: dict[str, str]):
+    def __init__(self, pages: dict[str, str], on_post=None):
         self.pages = pages
         self.requests_made = 0
+        self.posts: list[tuple[str, list[tuple[str, str]], str]] = []
+        self.on_post = on_post  # tests: callable(url, data) -> (status, html), may update self.pages
 
     def get(self, url: str) -> str:
         self.requests_made += 1
@@ -70,6 +83,11 @@ class FixtureClient:
         html = self.pages[url]
         check_logged_in(html, url)
         return html
+
+    def post(self, url: str, data: list[tuple[str, str]], referer: str) -> tuple[int, str]:
+        self.requests_made += 1
+        self.posts.append((url, data, referer))
+        return self.on_post(url, data) if self.on_post else (200, "<html><main>ok</main></html>")
 
 
 def relief_page1(client) -> tuple[int, int, list[Lesson]]:

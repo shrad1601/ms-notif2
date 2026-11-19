@@ -70,7 +70,7 @@ def run(w, site, now, **kw):
 
 
 def texts(rec):
-    return [t for t, _ in rec.sent]
+    return [sent[0] for sent in rec.sent]
 
 
 def test_first_run_is_baseline_only():
@@ -228,7 +228,7 @@ def test_html_is_escaped():
     from watcher.core import NewItem
     from watcher.parse import Lesson
     les = Lesson("relief", "A<1>", "P5 <b>&", "C", "2026-12-01T09:00", "2026-12-01T11:00", "MS Week 5")
-    out = format_new([NewItem(les, True)], empty_state())[0]
+    out = format_new([NewItem(les, True)], empty_state())[0].text
     assert "P5 &lt;b&gt;&amp;" in out and "A&lt;1&gt;" in out
 
 
