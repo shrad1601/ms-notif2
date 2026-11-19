@@ -106,35 +106,6 @@ def _icons(a: ClassAlert) -> str:
     return ("🔗" if a.b2b else "") + ("🔁" if a.taught else "")
 
 
-def _weeks(a: ClassAlert) -> str:
-    """' · 1 of 3 wks', ' · all 3 wks', or '' for single lessons."""
-    n_all = len(a.items)
-    if n_all == 1 or a.fits is None:
-        return ""
-    oks = a.fitting()
-    if len(oks) == n_all:
-        return f" · all {n_all} wks"
-    extra = f" (also {', '.join(_short_date(i.lesson.start) for i, _ in oks[1:])})" if len(oks) > 1 else ""
-    return f" · {len(oks)} of {n_all} wks{extra}"
-
-
-def _notes(a: ClassAlert, fits: list[Fit], max_flags: int = 2) -> list[str]:
-    lines = []
-    for f in fits:
-        for w in f.b2b_with[:1]:
-            lines.append(f"🔗 {e(w)}")
-            break
-        if f.pairs:
-            lines.append(f"🔗 pairs with {e(' / '.join(f.pairs[:2]))} here")
-        if lines:
-            break
-    if a.pending:
-        lines.append(f"✋ you've bid on other weeks ({e(', '.join(w.replace('MS Week', 'Wk') for w in a.pending))})")
-    flags = list(dict.fromkeys(flag for f in fits for flag in f.flags))
-    lines += [e(flag) for flag in flags[:max_flags]]
-    return lines
-
-
 # ---- new-class alerts --------------------------------------------------------------------
 def _title(a: ClassAlert) -> str:
     first = a.first
@@ -238,44 +209,86 @@ def format_alerts(alerts: list[ClassAlert]) -> list[str]:
 
 
 # ---- "open classes that fit" list --------------------------------------------------------
-def _entry(a: ClassAlert, with_icons: bool) -> str:
-    item, fit = a.fitting()[0]
-    les = item.lesson
-    icons = f"{_icons(a)} " if with_icons and _icons(a) else ""
-    lines = [f"{icons}<b>{_when(les.start, les.end)}</b>",
-             f"    {e(a.first.class_name)} · {e(les.centre)}{_weeks(a)}"]
-    lines += [f"    {note}" for note in _notes(a, [f for _, f in a.fitting()])]
+LEGEND = "<i>🔗 back-to-back · 🔁 covered before · ✋ already bid other weeks · ⚠️ check</i>"
+
+
+def _class_label(a: ClassAlert) -> str:
+    """'P4 Science (Achiever) 🔁 · 2 of 3 wks, also 7 Dec'"""
+    marks = ("🔁" if a.taught else "") + ("✋" if a.pending else "")
+    label = e(a.first.class_name) + (f" {marks}" if marks else "")
+    n_all, oks = len(a.items), a.fitting()
+    if n_all > 1:
+        if len(oks) == n_all:
+            label += " · both wks" if n_all == 2 else f" · all {n_all} wks"
+        else:
+            label += f" · {len(oks)} of {n_all} wks"
+        if len(oks) > 1:
+            label += ", also " + ", ".join(_short_date(i.lesson.start) for i, _ in oks[1:])
+    return label
+
+
+def _day_block(day_iso: str, centres: dict, show_b2b: bool) -> str:
+    lines = [f"<b>{_day(day_iso)}</b>"]
+    for centre, rows in centres.items():
+        head = f"📍 {e(centre)}"
+        if show_b2b:
+            existing = next((w for _, f, _ in rows for w in f.b2b_with), None)
+            paired = sorted({les.start for les, f, _ in rows if f.pairs})
+            partner = next((p for _, f, _ in rows for p in f.pairs), None)
+            if existing:
+                head += f" · 🔗 {e(existing)}"
+            elif len(paired) > 1:
+                head += " · 🔗 " + " → ".join(_time(t) for t in paired)
+            elif partner:
+                head += f" · 🔗 next to {e(partner)}"
+        lines.append(head)
+        slots: "OrderedDict[tuple[str, str], list[tuple[Fit, ClassAlert]]]" = OrderedDict()
+        for les, f, a in sorted(rows, key=lambda r: (r[0].start, r[2].first.class_name)):
+            slots.setdefault((les.start, les.end), []).append((f, a))
+        for (start, end), members in slots.items():
+            lines.append(f"• {_range(start, end)}: " + " · ".join(_class_label(a) for _, a in members))
+            flags = list(dict.fromkeys(flag for f, _ in members for flag in f.flags))
+            lines += [f"    {e(flag)}" for flag in flags[:2]]
     return "\n".join(lines)
 
 
-def _backlog_section(alerts: list[ClassAlert], title: str, kind: str) -> list[str]:
-    fitting = [a for a in alerts if a.fitting()]
-    by_date = lambda a: (a.fitting()[0][0].lesson.start, a.first.class_name)  # noqa: E731
-    best = sorted((a for a in fitting if a.starred), key=lambda a: (a.rank, *by_date(a)))
-    others = sorted((a for a in fitting if not a.starred), key=by_date)
+def _calendar_message(alerts: list[ClassAlert], title: str, subtitle: str, kind: str, show_b2b: bool) -> list[str]:
+    """Month → day → centre → time slot, with a blank line between days."""
+    months: "OrderedDict[str, OrderedDict[str, OrderedDict[str, list]]]" = OrderedDict()
+    rows = sorted(((a.fitting()[0][0].lesson, a.fitting()[0][1], a) for a in alerts),
+                  key=lambda r: (r[0].start[:10], r[0].centre, r[0].start))
+    for les, f, a in rows:
+        (months.setdefault(les.start[:7], OrderedDict())
+               .setdefault(les.start[:10], OrderedDict())
+               .setdefault(les.centre, []).append((les, f, a)))
 
     blocks = []
-    if best:
-        blocks.append("\n⭐ <b>Best bets</b> <i>(back-to-back, or a class you're already bidding on)</i>")
-        blocks += [_entry(a, with_icons=True) for a in best]
-    if others:
-        blocks.append("\n<b>Others</b> <i>(fit, but standalone)</i>")
-        blocks += [_entry(a, with_icons=True) for a in others]
-
-    n = len(fitting)
-    header = (f"📋 <b>{title}: {n} class{'es' if n != 1 else ''} fit</b> (not bid yet)\n"
-              f"<i>🔗 back-to-back · 🔁 covered before · ✋ bid on other weeks · ⚠️ check</i>")
-    return _pack(blocks, {kind}, header=header, sep="\n")
+    for month, days in months.items():
+        blocks.append(f"📅 <b>{datetime.fromisoformat(month + '-01').strftime('%B %Y').upper()}</b>")
+        blocks += [_day_block(day, centres, show_b2b) for day, centres in days.items()]
+    header = f"📋 <b>{title}</b>\n<i>{subtitle}</i>\n{LEGEND}"
+    return _pack(blocks, {kind}, header=header)
 
 
 def format_backlog(alerts: list[ClassAlert], cfg: Config | None = None) -> list[str]:
-    if not any(a.fitting() for a in alerts):
+    fitting = [a for a in alerts if a.fitting()]
+    if not fitting:
         return ["📋 Checked every open class against your calendar: nothing fits right now."]
     out = []
-    for kind, title in (("relief", "Relief"), ("makeup", "Holiday Make-Up")):
-        group = [a for a in alerts if a.first.kind == kind and a.fitting()]
-        if group:
-            out += _backlog_section(group, title, kind)
+    for kind, title in (("relief", "RELIEF"), ("makeup", "HOLIDAY MAKE-UP")):
+        group = [a for a in fitting if a.first.kind == kind]
+        best = [a for a in group if a.starred]
+        others = [a for a in group if not a.starred]
+        if best:
+            n = len(best)
+            out += _calendar_message(best, f"{title} · ⭐ BEST BETS",
+                                     f"{n} class{'es' if n != 1 else ''}: back-to-back, or already bidding "
+                                     f"on other weeks", kind, show_b2b=True)
+        if others:
+            n = len(others)
+            out += _calendar_message(others, f"{title} · OTHERS",
+                                     f"{n} class{'es that fit' if n != 1 else ' that fits'}, but standalone",
+                                     kind, show_b2b=False)
     return out
 
 

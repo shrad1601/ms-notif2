@@ -154,7 +154,13 @@ class Watcher:
                         continue
                     mine = other.status == "pending"
                     if mine or fit_of(other).ok:
-                        f.pairs.append(f"{_fmt_time(os_)} {other.class_name}" + (" (you've bid)" if mine else ""))
+                        if mine:
+                            note = " (you've bid)"
+                        elif other.kind != les.kind:
+                            note = " (make-up)" if other.kind == "makeup" else " (relief)"
+                        else:
+                            note = ""
+                        f.pairs.append(f"{_fmt_time(os_)} {other.class_name}{note}")
             a.taught = any(signature(i.lesson.class_name, i.lesson.centre, datetime.fromisoformat(i.lesson.start))
                            in taught_sigs for i in a.items)
             a.rank = rank(a.fits, a.taught, continuing=bool(a.pending))

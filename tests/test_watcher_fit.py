@@ -55,11 +55,16 @@ def test_baseline_sends_backlog_once():
     run(w, site, T0)
     msgs = texts(rec)
     assert "now watching" in msgs[0]
-    assert msgs[1].startswith("📋 <b>Relief: 2 classes fit</b> (not bid yet)")
-    assert msgs[2].startswith("📋 <b>Holiday Make-Up: 2 classes fit</b> (not bid yet)")
+    # AA-1 has a pending bid on another week -> best bet; the rest are standalone
+    assert [m.split("\n", 1)[0] for m in msgs[1:]] == [
+        "📋 <b>RELIEF · ⭐ BEST BETS</b>",
+        "📋 <b>RELIEF · OTHERS</b>",
+        "📋 <b>HOLIDAY MAKE-UP · OTHERS</b>",
+    ]
+    assert "<i>1 class that fits, but standalone</i>" in msgs[2]
     assert store.state["backlog_sent"]
     run(w, site, T0 + timedelta(minutes=61))
-    assert len(rec.sent) == 3
+    assert len(rec.sent) == 4
 
 
 def test_standalone_new_class_goes_to_summary():
@@ -117,11 +122,11 @@ def test_bidding_on_other_weeks_is_not_covered_before():
     site = ScheduleSite()
     w, rec, _ = make(site, FakeCalendar())
     run(w, site, T0)
-    relief = next(t for t in texts(rec) if t.startswith("📋 <b>Relief"))
+    best = next(t for t in texts(rec) if t.startswith("📋 <b>RELIEF · ⭐ BEST BETS"))
     # AA-1 has a pending bid on Wk 4: shown as ✋, never as 🔁, and listed as a best bet
-    assert "✋ you've bid on other weeks (Wk 4)" in relief
-    assert "🔁" not in relief.split("</i>", 1)[1]
-    assert relief.index("Best bets") < relief.index("P5 English") < relief.index("Others")
+    assert "• 2–4pm: P5 English ✋" in best
+    body = best.split("⚠️ check</i>", 1)[1]
+    assert "🔁" not in body
 
 
 def test_assigned_dash_lesson_counts_as_busy():
@@ -158,12 +163,24 @@ def test_backlog_pairs_back_to_back_open_classes():
     ]]
     w, rec, _ = make(site, FakeCalendar())
     run(w, site, T0)
-    msg = next(t for t in texts(rec) if t.startswith("📋 <b>Holiday Make-Up"))
-    best, others = msg.split("<b>Others</b>")
-    assert "🔗 <b>Thu 17 Dec 10am–12pm</b>\n    P3 English · Centre S\n    🔗 pairs with 12:45pm P5 Science here" in best
-    assert "🔗 <b>Thu 17 Dec 12:45–2:45pm</b>\n    P5 Science · Centre S\n    🔗 pairs with 10am P3 English here" in best
-    assert "🔗 pairs" not in others
-    assert "<b>Thu 17 Dec 10am–12pm</b>\n    P2 Maths · Centre T" in others
+    msgs = texts(rec)
+    best = next(t for t in msgs if t.startswith("📋 <b>HOLIDAY MAKE-UP · ⭐ BEST BETS"))
+    others = next(t for t in msgs if t.startswith("📋 <b>HOLIDAY MAKE-UP · OTHERS"))
+    assert ("📅 <b>DECEMBER 2026</b>\n\n<b>Thu 17 Dec</b>\n📍 Centre S · 🔗 10am → 12:45pm\n"
+            "• 10am–12pm: P3 English\n• 12:45–2:45pm: P5 Science") in best
+    assert "Centre T" not in best
+    assert "<b>Thu 17 Dec</b>\n📍 Centre T\n• 10am–12pm: P2 Maths" in others
+    assert "🔗" not in others.split("⚠️ check</i>", 1)[1]
+
+
+def test_backlog_names_partner_in_the_other_list():
+    site = ScheduleSite()
+    site.relief = {1: [("RS-1", "P3 Maths", "Centre S", [("MS Week 8", "17 Dec 2026 03:00 PM–17 Dec 2026 05:00 PM", False)])]}
+    site.makeup = [[("HMU-B", "P5 Science", "Centre S", "17 Dec 2026 12:45 PM–17 Dec 2026 02:45 PM")]]
+    w, rec, _ = make(site, FakeCalendar())
+    run(w, site, T0)
+    best = next(t for t in texts(rec) if t.startswith("📋 <b>RELIEF · ⭐ BEST BETS"))
+    assert "📍 Centre S · 🔗 next to 12:45pm P5 Science (make-up)\n• 3–5pm: P3 Maths" in best
 
 
 def test_backlog_skips_days_blocked_by_an_all_day_trip():
@@ -172,6 +189,6 @@ def test_backlog_skips_days_blocked_by_an_all_day_trip():
     w, rec, _ = make(site, FakeCalendar([trip]))
     run(w, site, T0)
     msgs = texts(rec)
-    assert not any(t.startswith("📋 <b>Holiday Make-Up") for t in msgs)  # both make-ups are 14/15 Dec
-    relief = next(t for t in msgs if t.startswith("📋 <b>Relief"))
+    assert not any(t.startswith("📋 <b>HOLIDAY MAKE-UP") for t in msgs)  # both make-ups are 14/15 Dec
+    relief = "\n".join(t for t in msgs if t.startswith("📋 <b>RELIEF"))
     assert "Sun 6 Dec" in relief and "Sat 12 Dec" in relief
