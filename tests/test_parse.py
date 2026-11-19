@@ -37,6 +37,7 @@ def test_relief_page():
     assert first.start == "2026-11-27T17:15" and first.end == "2026-11-27T19:15"
     assert first.status == "open" and first.request_id
     assert lessons[1].status == "pending" and lessons[1].request_id is None
+    assert lessons[1].withdraw_id and lessons[0].withdraw_id is None
     assert lessons[0].key == "relief|XX2027-P6E PW-Fri-1|2026-11-27T17:15"
 
 
@@ -63,6 +64,17 @@ def test_makeup_page():
 def test_makeup_last_page_has_no_next():
     lessons, nxt = parse_makeup_page(makeup_page([]))
     assert lessons == [] and nxt is None
+
+
+def test_makeup_my_bids_page():
+    from fakepages import makeup_my_bids, makeup_withdraw_id
+    from watcher.parse import parse_makeup_bids_page
+    html = makeup_my_bids({"HMU-1": "Pending", "HMU-2": "Withdrawn"})
+    html = html.replace("</div></main>", '<nav class="bulletin-pagination"><span>Page 1 of 2</span>'
+                                         '<a href="/teacher/bulletin/?bids_page=2">Next →</a></nav></div></main>')
+    bids, nxt = parse_makeup_bids_page(html)
+    assert bids == {"HMU-1": ("pending", makeup_withdraw_id("HMU-1")), "HMU-2": ("withdrawn", None)}
+    assert nxt == "/teacher/bulletin/?bids_page=2"
 
 
 def test_login_page_detected():

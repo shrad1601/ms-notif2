@@ -30,6 +30,7 @@ class Lesson:
     status: str = "open"  # "open" or the pill text lowercased, e.g. "pending"
     closes: str | None = None
     extra: dict = field(default_factory=dict)
+    withdraw_id: str | None = None  # relief: id in the Withdraw form shown on my pending rows
 
     @property
     def key(self) -> str:
@@ -121,8 +122,34 @@ def parse_relief_page(html: str) -> tuple[int, int, int, list[Lesson]]:
                 rid = um.group(0) if um else None
             pill = row.select_one(".pill-bulletin-bid-placed")
             status = _text(pill).lower() if pill else "open"
-            lessons.append(Lesson("relief", code, name, centre, start, end, week, rid, status))
+            wform = row.select_one('form[action$="/withdraw/"]')
+            wm = UUID_RE.search(wform.get("action", "")) if wform is not None else None
+            lessons.append(Lesson("relief", code, name, centre, start, end, week, rid, status,
+                                  withdraw_id=wm.group(0) if wm else None))
     return total, page, pages, lessons
+
+
+def parse_makeup_bids_page(html: str) -> tuple[dict[str, tuple[str, str | None]], str | None]:
+    """Holiday Make-Up → My Bids: {class code: (status, withdraw id)} and the "Next" link, if any."""
+    soup = BeautifulSoup(html, "html.parser")
+    tab = soup.select_one("#tab-my-bids") or soup
+    bids: dict[str, tuple[str, str | None]] = {}
+    for card in tab.select("article.card-bulletin"):
+        code = CLASS_CODE_PREFIX.sub("", _text(card.select_one(".card-bulletin-permanent-class-code")))
+        if not code:
+            continue
+        pills = [p for p in card.select("[class*=pill-bulletin]")
+                 if not any(k in " ".join(p.get("class", [])) for k in ("assignment", "programme", "pills-bulletin"))]
+        status = _text(pills[0]).lower() if pills else ""
+        form = card.select_one('form[action*="/withdraw/"]')
+        wm = UUID_RE.search(form.get("action", "")) if form is not None else None
+        bids[code] = (status, wm.group(0) if wm else None)
+    next_href = None
+    for a in tab.select("nav.bulletin-pagination a[href]"):
+        if "next" in _text(a).lower():
+            next_href = a["href"]
+            break
+    return bids, next_href
 
 
 def parse_makeup_page(html: str) -> tuple[list[Lesson], str | None]:

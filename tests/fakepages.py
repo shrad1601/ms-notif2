@@ -104,7 +104,24 @@ def makeup_request_id(code):
     return _uuid(code)
 
 
-def makeup_my_bids(codes):
-    cards = "".join(f'<article class="card-bulletin"><span class="card-bulletin-permanent-class-code">Class code: {c}</span>'
-                    f'<span class="pill-bulletin-bid-placed">Pending</span></article>' for c in codes)
-    return f"<html><head><title>Bulletin</title></head><body><main>{cards}</main></body></html>"
+def relief_withdraw_id(code, rng):
+    return _uuid(code + rng + "w")
+
+
+def makeup_withdraw_id(code):
+    return _uuid(code + "w")
+
+
+def makeup_my_bids(bids):
+    """bids: {class code: status}, e.g. {"HMU-1": "Pending", "HMU-2": "Withdrawn"}"""
+    cards = []
+    for code, status in bids.items():
+        form = (f'<form method="post" action="/teacher/bulletin/permanent/{makeup_withdraw_id(code)}/withdraw/">'
+                f'<input type="hidden" name="csrfmiddlewaretoken" value="TESTTOKEN">'
+                f'<button type="submit" class="btn-bulletin-withdraw">Withdraw</button></form>') if status == "Pending" else ""
+        cards.append(f'<article class="card-bulletin"><div class="pills-bulletin">'
+                     f'<span class="pill-bulletin-assignment">Class assignment</span></div>'
+                     f'<span class="card-bulletin-permanent-class-code">Class code: {code}</span>'
+                     f'<span class="pill-bulletin-bid-placed">{status}</span>{form}</article>')
+    return (f'<html><head><title>Bulletin</title></head><body><main><div id="tab-my-bids">'
+            f'{"".join(cards)}</div></main></body></html>')

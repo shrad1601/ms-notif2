@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from itertools import count
 
-from fakepages import makeup_my_bids, makeup_request_id, request_id
+from fakepages import makeup_my_bids, makeup_request_id, makeup_withdraw_id, relief_withdraw_id, request_id
 from test_watcher import T0, WK, run, texts
 from test_watcher_fit import MONDAY, FakeCalendar, ScheduleSite, ev, make
 from watcher.bid import MAKEUP_MY_BIDS_URL
@@ -15,7 +15,7 @@ class BidSite(ScheduleSite):
 
     def __init__(self):
         super().__init__()
-        self.makeup_bids: list[str] = []
+        self.makeup_bids: dict[str, str] = {}  # class code -> status on My Bids
         self.client_obj = None
 
     def client(self):
@@ -25,28 +25,34 @@ class BidSite(ScheduleSite):
         self.client_obj = c
         return c
 
-    def _mark_relief(self, rids):
+    def _mark_relief(self, ids, pending=True):
         for page, cards in self.relief.items():
             for code, name, centre, lessons in cards:
-                for i, (week, rng, pending) in enumerate(lessons):
-                    if request_id(code, rng) in rids:
-                        lessons[i] = (week, rng, True)
+                for i, (week, rng, _) in enumerate(lessons):
+                    if (request_id(code, rng) if pending else relief_withdraw_id(code, rng)) in ids:
+                        lessons[i] = (week, rng, pending)
 
     def _on_post(self, url, data):
         fields = dict(data)
         assert fields.get("csrfmiddlewaretoken") == "TESTTOKEN"
         path = url.removeprefix(BASE)
+        parts = path.strip("/").split("/")
         if path == "/teacher/bulletin/bid-all/":
             self._mark_relief({v for k, v in data if k == "assignment_request_ids"})
-        elif path.startswith("/teacher/bulletin/permanent/"):
-            rid = path.split("/")[4]
+        elif parts[2] == "permanent" and parts[-1] == "bid":
             for page in self.makeup:
                 for card in list(page):
-                    if makeup_request_id(card[0]) == rid:
+                    if makeup_request_id(card[0]) == parts[3]:
                         page.remove(card)
-                        self.makeup_bids.append(card[0])
+                        self.makeup_bids[card[0]] = "Pending"
+        elif parts[2] == "permanent" and parts[-1] == "withdraw":
+            for code in self.makeup_bids:
+                if makeup_withdraw_id(code) == parts[3]:
+                    self.makeup_bids[code] = "Withdrawn"
+        elif parts[-1] == "withdraw":
+            self._mark_relief({parts[2]}, pending=False)
         else:
-            self._mark_relief({path.split("/")[3]})
+            self._mark_relief({parts[2]})
         live = self.client_obj
         fresh = self.client()  # rebuild pages from the updated data
         self.client_obj = live
@@ -184,6 +190,51 @@ def test_bid_from_the_best_bets_list_for_a_makeup():
     assert url == f"/teacher/bulletin/permanent/{makeup_request_id('HMU-B')}/bid/"
     assert ("category", "holiday-make-up") in data
     assert texts(rec)[-1].startswith("✅ <b>Bid placed</b>: P5 Science · Centre S")
+
+
+def test_successful_bid_offers_withdraw_and_it_works_for_relief():
+    site = BidSite()
+    w, rec, _ = setup_starred_class(site, both_weeks_fit=True)
+    tap(w, rec, site, "✅ Bid all")
+    assert [b[0] for b in buttons(rec)][-1] == "↩️ Withdraw"
+    tap(w, rec, site, "↩️ Withdraw")  # each tap gets a fresh fake client, so posts() is this tap's only
+    withdrawn = {url for url, _ in posts(site)}
+    assert withdrawn == {f"/teacher/bulletin/{relief_withdraw_id('CC-1', WK.format(d=d))}/withdraw/" for d in ("19", "26")}
+    result = texts(rec)[-1]
+    assert result.startswith("↩️ <b>Withdrawn</b>: P6 Maths · Centre E")
+    assert "Sat 19 Dec" in result and "Sat 26 Dec" in result
+    assert [b[0] for b in buttons(rec)][-1] == "↩️ Withdrawn"  # button replaced, can't be tapped again
+
+
+def test_withdraw_makeup_bid():
+    site = BidSite()
+    site.makeup = [[
+        ("HMU-A", "P3 English", "Centre S", "17 Dec 2026 10:00 AM–17 Dec 2026 12:00 PM"),
+        ("HMU-B", "P5 Science", "Centre S", "17 Dec 2026 12:45 PM–17 Dec 2026 02:45 PM"),
+    ]]
+    w, rec, _ = make(site, FakeCalendar())
+    run(w, site, T0)
+    tap(w, rec, site, "Bid · 17 Dec 12:45pm")
+    assert site.makeup_bids == {"HMU-B": "Pending"}
+    tap(w, rec, site, "↩️ Withdraw")
+    assert posts(site)[-1][0] == f"/teacher/bulletin/permanent/{makeup_withdraw_id('HMU-B')}/withdraw/"
+    assert site.makeup_bids == {"HMU-B": "Withdrawn"}
+    assert texts(rec)[-1].startswith("↩️ <b>Withdrawn</b>: P5 Science · Centre S")
+
+
+def test_withdraw_when_no_longer_pending():
+    site = BidSite()
+    site.makeup = [[
+        ("HMU-A", "P3 English", "Centre S", "17 Dec 2026 10:00 AM–17 Dec 2026 12:00 PM"),
+        ("HMU-B", "P5 Science", "Centre S", "17 Dec 2026 12:45 PM–17 Dec 2026 02:45 PM"),
+    ]]
+    w, rec, _ = make(site, FakeCalendar())
+    run(w, site, T0)
+    tap(w, rec, site, "Bid · 17 Dec 12:45pm")
+    site.makeup_bids["HMU-B"] = "Accepted"  # HR already decided
+    tap(w, rec, site, "↩️ Withdraw")
+    assert posts(site) == []
+    assert texts(rec)[-1].startswith("❌ <b>Nothing withdrawn</b>")
 
 
 def test_csrf_cookie_fallback_is_read_from_the_cookie_string():

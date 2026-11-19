@@ -82,8 +82,11 @@ Groups 1–3 get ⭐ and their own message, with ✅/❌ for each week. Everythi
   and nothing is ever bid without a tap.
 - **When taps are picked up:** taps arrive while a run is listening between checks (most of each hour), usually
   within seconds. A tap made in the short gap between hourly runs waits for the next run.
+- **Progress message:** each tap posts a "⏳ Bidding on …" message, which is then edited into the ✅ or ❌ result.
 - **Logs** only say "tap handled", never what was bid.
-- To undo a bid, use **Withdraw** on Dash as usual.
+- **Undo:** a successful bid's message has a **↩️ Withdraw** button. It finds the bid (relief: the Pending
+  row's Withdraw form on the bulletin; make-up: My Bids, across all pages), submits Dash's Withdraw form, and
+  confirms it's no longer Pending. You can also withdraw on Dash as usual.
 
 The first time this is switched on (or when run with `resend_backlog`), you get the **open classes that fit**
 list, one message each for Relief and Holiday Make-Up. ⭐ Best bets come first, then the standalone ones, in date order.

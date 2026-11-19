@@ -1,6 +1,10 @@
-"""Submitting "I'm Interested" on Dash. Only ever called after an explicit tap in Telegram."""
+"""Submitting "I'm Interested" / "Withdraw" on Dash. Only ever called after an explicit tap in Telegram."""
+from urllib.parse import urljoin
+
 from .fetch import BASE, MAKEUP_URL, RELIEF_URL
-from .parse import csrf_token
+from .parse import csrf_token, parse_makeup_bids_page
+
+MAX_BID_PAGES = 15
 
 RELIEF_FIELDS = [("category", "relief-cover"), ("programme", "all"), ("tab", "my-bids")]
 MAKEUP_FIELDS = [("category", "holiday-make-up"), ("programme", "all"), ("tab", "my-bids")]
@@ -45,6 +49,26 @@ def bid_makeup(client, request_id: str) -> None:
             [("csrfmiddlewaretoken", token), *MAKEUP_FIELDS], MAKEUP_URL)
 
 
-def makeup_bid_listed(client, class_code: str) -> bool:
-    """Make-up bids leave the Available list; confirm the class now shows under My Bids."""
-    return class_code in client.get(MAKEUP_MY_BIDS_URL)
+def makeup_bids(client, wanted: set[str]) -> dict[str, tuple[str, str | None]]:
+    """Find these class codes under Holiday Make-Up → My Bids (several pages): {code: (status, withdraw id)}."""
+    found: dict[str, tuple[str, str | None]] = {}
+    url: str | None = MAKEUP_MY_BIDS_URL
+    seen = set()
+    while url and url not in seen and len(seen) < MAX_BID_PAGES and not wanted <= found.keys():
+        seen.add(url)
+        bids, next_href = parse_makeup_bids_page(client.get(url))
+        found.update({code: v for code, v in bids.items() if code in wanted})
+        url = urljoin(BASE, next_href) if next_href else None
+    return found
+
+
+def withdraw_relief(client, withdraw_id: str) -> None:
+    token = _token(client, RELIEF_URL)
+    _submit(client, f"{BASE}/teacher/bulletin/{withdraw_id}/withdraw/",
+            [("csrfmiddlewaretoken", token), *RELIEF_FIELDS], RELIEF_URL)
+
+
+def withdraw_makeup(client, withdraw_id: str) -> None:
+    token = _token(client, MAKEUP_MY_BIDS_URL)
+    _submit(client, f"{BASE}/teacher/bulletin/permanent/{withdraw_id}/withdraw/",
+            [("csrfmiddlewaretoken", token), *MAKEUP_FIELDS], MAKEUP_MY_BIDS_URL)

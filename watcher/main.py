@@ -9,7 +9,7 @@ from html import escape as e
 
 import requests
 
-from .bid import BidError, bid_makeup, bid_relief, makeup_bid_listed
+from .bid import BidError, bid_makeup, bid_relief, makeup_bids, withdraw_makeup, withdraw_relief
 from .core import NewItem, apply_scan, due
 from .dash_schedule import fetch_weeks, signature
 from .fetch import Client, makeup_full, relief_full, relief_page1
@@ -24,7 +24,8 @@ SCHEDULE_EVERY = timedelta(hours=24)
 ALERT_COOLDOWN = timedelta(hours=3)
 FAILING_RETRY_EVERY = timedelta(minutes=30)
 SGT_OFFSET = timedelta(hours=8)
-LESSON_FIELDS = ("kind", "class_code", "class_name", "centre", "start", "end", "week", "request_id", "status", "closes")
+LESSON_FIELDS = ("kind", "class_code", "class_name", "centre", "start", "end", "week", "request_id", "status", "closes",
+                 "withdraw_id")
 
 
 def utcnow() -> datetime:
@@ -78,8 +79,7 @@ class Watcher:
             msg = Message(msg)
         keyboard, tokens = [], []
         for row in msg.rows:
-            token = secrets.token_urlsafe(6)
-            self.state["actions"][token] = {**row.payload, "status": "open", "created": _ts(now)}
+            token = self._register(row.payload, now)
             tokens.append(token)
             keyboard.append([{"text": b.label, "callback_data": f"{b.action}:{token}"} for b in row.buttons])
         silent = is_quiet(now) and reply_to is None
@@ -92,6 +92,11 @@ class Watcher:
             for token in tokens:
                 self.state["actions"][token]["message_id"] = message_id
         return message_id
+
+    def _register(self, payload: dict, now: datetime) -> str:
+        token = secrets.token_urlsafe(6)
+        self.state["actions"][token] = {**payload, "status": "open", "created": _ts(now)}
+        return token
 
     def _mark_button(self, act: dict, token: str, label: str) -> None:
         mid = act.get("message_id")
@@ -136,24 +141,86 @@ class Watcher:
             self.notifier.answer(cq["id"], "Skipped.")
             self._mark_button(act, token, "Skipped")
             return
-        if action != "bid":
+        if action not in ("bid", "withdraw"):
             self.notifier.answer(cq["id"], "Unknown button.")
             return
-        act["status"] = "bidding"
+        label = act.get("label", "this class")
+        bidding = action == "bid"
+        act["status"] = "working"
         self.save()
-        self.notifier.answer(cq["id"], "On it: checking Dash and your calendar…")
+        self.notifier.answer(cq["id"], "On it…")
         # a visible message straight away, edited into the result once Dash has answered
-        progress = self._send(f"⏳ <b>Bidding</b> on {e(act.get('label', 'this class'))}…\n"
-                              f"<i>Checking the bulletin and your calendar first.</i>",
+        progress = self._send(f"⏳ <b>{'Bidding on' if bidding else 'Withdrawing'}</b> {e(label)}…\n"
+                              f"<i>{'Checking the bulletin and your calendar first.' if bidding else 'Finding the bid on Dash.'}</i>",
                               now, reply_to=act.get("message_id"))
-        ok, text = self._do_bid(act, now)
-        act["status"] = "done" if ok else "failed"
+        if bidding:
+            ok, text, placed = self._do_bid(act, now)
+        else:
+            ok, text = self._do_withdraw(act, now)
+            placed = []
+        act["status"] = ("done" if bidding else "withdrawn") if ok else "failed"
         act["finished"] = _ts(now)
         print("tap handled")  # logs are public: don't record what was bid on or whether it worked
-        if progress is None or not self.notifier.edit_text(progress, text):
-            self._send(text, now, reply_to=act.get("message_id"))
-        self._mark_button(act, token, ("✅ Bid placed · " if ok else "❌ Not bid · ") + act.get("label", ""))
+
+        keyboard = None
+        if placed:  # offer a one-tap undo on the success message
+            undo = self._register({"kind": act["kind"], "class_key": act.get("class_key"), "label": label,
+                                   "keys": [les.key for les in placed],
+                                   "codes": sorted({les.class_code for les in placed})}, now)
+            keyboard = [[{"text": "↩️ Withdraw", "callback_data": f"withdraw:{undo}"}]]
+        if progress is not None and self.notifier.edit_text(progress, text, keyboard):
+            result_id = progress
+        else:
+            result_id = self._send(text, now, reply_to=act.get("message_id"))
+        if keyboard and result_id is not None:
+            if result_id != progress:  # result went out as a new message: attach the button to it
+                self.notifier.edit_keyboard(result_id, keyboard)
+            self.state["keyboards"][str(result_id)] = keyboard
+            self.state["actions"][undo]["message_id"] = result_id
+        if bidding:
+            self._mark_button(act, token, ("✅ Bid placed · " if ok else "❌ Not bid · ") + label)
+        else:
+            self._mark_button(act, token, "↩️ Withdrawn" if ok else "❌ Not withdrawn")
         self.save()
+
+    def _do_withdraw(self, act: dict, now: datetime) -> tuple[bool, str]:
+        kind, label = act["kind"], e(act.get("label", "this class"))
+        try:
+            if kind == "relief":
+                current = {les.key: les for les in self._scan("relief", now)}
+                targets = [current[k] for k in act["keys"]
+                           if k in current and current[k].status == "pending" and current[k].withdraw_id]
+                if not targets:
+                    return False, (f"❌ <b>Nothing withdrawn</b> for {label}: it isn't pending on the bulletin any "
+                                   f"more (HR may already have decided). Check My Bids on Dash.")
+                for t in targets:
+                    withdraw_relief(self.client, t.withdraw_id)
+                after = {les.key: les for les in self._scan("relief", now)}
+                done = [t.key for t in targets if not (t.key in after and after[t.key].status == "pending")]
+            else:
+                codes = set(act.get("codes", []))
+                bids = makeup_bids(self.client, codes)
+                targets = [(code, wid) for code, (status, wid) in bids.items() if status == "pending" and wid]
+                if not targets:
+                    return False, (f"❌ <b>Nothing withdrawn</b> for {label}: it isn't pending under My Bids "
+                                   f"any more. Check Dash.")
+                for _, wid in targets:
+                    withdraw_makeup(self.client, wid)
+                after = makeup_bids(self.client, codes)
+                done = [code for code, _ in targets if after.get(code, ("", None))[0] != "pending"]
+        except SessionExpired:
+            return False, f"❌ Couldn't withdraw {label}: the Dash session has expired (refresh <code>MS_COOKIE</code>)."
+        except (BidError, LayoutChanged, requests.RequestException) as exc:
+            return False, f"❌ Couldn't withdraw {label}: {e(str(exc) or exc.__class__.__name__)}"
+
+        if not done:
+            return False, f"⚠️ Sent the withdrawal for {label}, but Dash still shows it as Pending. Please check My Bids."
+        lessons = [self.state["lessons"][k] for k in act["keys"] if k in self.state["lessons"]]
+        lines = [f"↩️ <b>Withdrawn</b>: {label}"]
+        lines += [f"• {_when_short(_lesson(rec))}" for rec in lessons]
+        if len(done) < len(targets):
+            lines.append("⚠️ Not every week withdrew; please check My Bids on Dash.")
+        return True, "\n".join(lines)
 
     def _scan(self, kind: str, now: datetime) -> list[Lesson]:
         if kind == "relief":
@@ -165,7 +232,8 @@ class Watcher:
         self._stashed += apply_scan(self.state, kind, lessons, complete, now)
         return lessons
 
-    def _do_bid(self, act: dict, now: datetime) -> tuple[bool, str]:
+    def _do_bid(self, act: dict, now: datetime) -> tuple[bool, str, list[Lesson]]:
+        """Returns (success, message, lessons now confirmed Pending)."""
         kind, label = act["kind"], e(act.get("label", "this class"))
         try:
             current = {les.key: les for les in self._scan(kind, now)}
@@ -188,7 +256,7 @@ class Watcher:
                     notes.append(f"skipped {_short(t)}: {fits[t.key].reason}")
                 targets = [t for t in targets if fits[t.key].ok]
             if not targets:
-                return False, f"❌ <b>Nothing bid</b> for {label}.\n" + "\n".join(f"• {e(n)}" for n in notes)
+                return False, f"❌ <b>Nothing bid</b> for {label}.\n" + "\n".join(f"• {e(n)}" for n in notes), []
 
             if kind == "relief":
                 open_on_card = {les.key for les in current.values()
@@ -201,11 +269,13 @@ class Watcher:
                 use_all = False
                 for t in targets:
                     bid_makeup(self.client, t.request_id)
-                confirmed = [t for t in targets if makeup_bid_listed(self.client, t.class_code)]
+                bids = makeup_bids(self.client, {t.class_code for t in targets})
+                confirmed = [t for t in targets if bids.get(t.class_code, ("", None))[0] == "pending"]
         except SessionExpired:
-            return False, f"❌ Couldn't bid on {label}: the Dash session has expired (refresh <code>MS_COOKIE</code>)."
+            return (False, f"❌ Couldn't bid on {label}: the Dash session has expired "
+                           f"(refresh <code>MS_COOKIE</code>).", [])
         except (BidError, LayoutChanged, requests.RequestException) as exc:
-            return False, f"❌ Couldn't bid on {label}: {e(str(exc) or exc.__class__.__name__)}"
+            return False, f"❌ Couldn't bid on {label}: {e(str(exc) or exc.__class__.__name__)}", []
 
         lines = []
         if confirmed:
@@ -218,7 +288,7 @@ class Watcher:
             lines.append(f"⚠️ Sent, but I couldn't see it under My Bids yet: "
                          f"{', '.join(_short(t) for t in unconfirmed)}. Please check Dash.")
         lines += [f"• {e(n)}" for n in notes]
-        return bool(confirmed), "\n".join(lines)
+        return bool(confirmed), "\n".join(lines), confirmed
 
     def save(self) -> None:
         current = json.dumps(self.state, sort_keys=True)

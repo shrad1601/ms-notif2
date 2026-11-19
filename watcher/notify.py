@@ -380,9 +380,12 @@ class Telegram:
         self._call("editMessageReplyMarkup", {"chat_id": self.chat_id, "message_id": message_id,
                                               "reply_markup": {"inline_keyboard": keyboard}})
 
-    def edit_text(self, message_id: int, text: str) -> bool:
-        return self._call("editMessageText", {"chat_id": self.chat_id, "message_id": message_id, "text": text,
-                                              "parse_mode": "HTML", "disable_web_page_preview": True}) is not None
+    def edit_text(self, message_id: int, text: str, keyboard: list | None = None) -> bool:
+        payload = {"chat_id": self.chat_id, "message_id": message_id, "text": text,
+                   "parse_mode": "HTML", "disable_web_page_preview": True}
+        if keyboard:
+            payload["reply_markup"] = {"inline_keyboard": keyboard}
+        return self._call("editMessageText", payload) is not None
 
     def answer(self, callback_id: str, text: str) -> None:
         self._call("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
@@ -416,9 +419,9 @@ class Recorder:
     def edit_keyboard(self, message_id: int, keyboard: list) -> None:
         self.edits.append((message_id, keyboard))
 
-    def edit_text(self, message_id: int, text: str) -> bool:
-        _, silent, keyboard, reply_to = self.sent[message_id - 1]
-        self.sent[message_id - 1] = (text, silent, keyboard, reply_to)
+    def edit_text(self, message_id: int, text: str, keyboard: list | None = None) -> bool:
+        _, silent, old_keyboard, reply_to = self.sent[message_id - 1]
+        self.sent[message_id - 1] = (text, silent, keyboard or old_keyboard, reply_to)
         return True
 
     def answer(self, callback_id: str, text: str) -> None:
