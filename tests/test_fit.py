@@ -45,7 +45,7 @@ def test_latest_end_per_weekday():
 
 def test_overlap_is_a_clash():
     f = evaluate(L(*SAT), [ev("Other job", "2026-12-05T15:00", "2026-12-05T17:00", "Some Mall")], CFG)
-    assert not f.ok and "Other job" in f.reason and "3:00pm–5:00pm" in f.reason
+    assert not f.ok and f.reason == "clash: Other job (3–5pm)"
 
 
 def test_soft_keyword_overlap_is_flagged_not_blocking():
@@ -77,14 +77,30 @@ def test_multi_day_timed_event_marked_free_still_blocks():
 def test_nearby_event_elsewhere_is_flagged_with_gap():
     f = evaluate(L(*SAT), [ev("Other job", "2026-12-05T11:00", "2026-12-05T13:30", "Far Mall")], CFG)
     assert f.ok and f.flags == ["⚠️ 30 min after Other job @ Far Mall"]
-    f2 = evaluate(L(*SAT), [ev("Tuition", "2026-12-05T16:45", "2026-12-05T18:00")], CFG)
-    assert f2.ok and f2.flags == ["⚠️ 45 min before Tuition"]
+    f2 = evaluate(L(*SAT), [ev("Online class", "2026-12-05T16:15", "2026-12-05T18:00", "Online")], CFG)
+    assert f2.ok and f2.flags == ["⚠️ 15 min before Online class (online)"]
+    f3 = evaluate(L(*SAT), [ev("Party", "2026-12-05T16:00", "2026-12-05T20:00")], CFG)
+    assert f3.flags == ["⚠️ right before Party"]
+
+
+def test_gaps_over_30_min_are_not_flagged():
+    f = evaluate(L(*SAT), [ev("Tuition", "2026-12-05T16:45", "2026-12-05T18:00")], CFG)
+    assert f.ok and not f.flags
+
+
+def test_trip_blocks_its_whole_first_day():
+    # flight at 7:30pm: a 5:15-7:15pm lesson that day can't happen
+    trip = ev("Trip", "2026-12-21T19:30", "2027-01-09T06:00")
+    f = evaluate(L("2026-12-21T17:15", "2026-12-21T19:15"), [trip], CFG)
+    assert not f.ok and f.reason == "Trip (21 Dec–9 Jan)"
+    assert not evaluate(L("2027-01-09T14:00", "2027-01-09T16:00"), [trip], CFG).ok  # day you're back
+    assert evaluate(L("2027-01-10T14:00", "2027-01-10T16:00"), [trip], CFG).ok
 
 
 def test_same_centre_back_to_back():
-    f = evaluate(L(*SAT), [ev("P4 Maths (Dash)", "2026-12-05T11:45", "2026-12-05T13:45", "Toa Payoh")], CFG)
-    assert f.ok and f.back_to_back and not f.flags
-    assert f.b2b_with == ["after P4 Maths (Dash) (11:45am–1:45pm)"]
+    f = evaluate(L(*SAT), [ev("P4 Maths", "2026-12-05T11:45", "2026-12-05T13:45", "Toa Payoh")], CFG)
+    assert f.ok and f.back_to_back and f.b2b and not f.flags
+    assert f.b2b_with == ["after your P4 Maths (11:45am–1:45pm)"]
 
 
 def test_same_place_ignores_mind_stretcher_and_cc_wording():
@@ -112,12 +128,17 @@ def test_overlapping_pending_bid():
     assert not f.ok and "pending bid" in f.reason
 
 
-@pytest.mark.parametrize("oks,taught,expected", [
-    ([True, True], True, 1), ([True, False], True, 2), ([True, True], False, 3),
-    ([True, False], False, 4), ([True, False, False], False, 5), ([False], True, 5),
+@pytest.mark.parametrize("fits,taught,continuing,expected", [
+    ([Fit(True, back_to_back=True)], True, False, 1),
+    ([Fit(True, pairs=["3pm P2 Maths"])], False, True, 1),
+    ([Fit(True, back_to_back=True), Fit(False)], False, False, 2),
+    ([Fit(True)], False, True, 3),
+    ([Fit(True)], True, False, 4),  # covered before but standalone: listed, no ⭐
+    ([Fit(True)], False, False, 4),
+    ([Fit(False)], True, True, 5),
 ])
-def test_rank(oks, taught, expected):
-    assert rank([Fit(ok) for ok in oks], taught) == expected
+def test_rank(fits, taught, continuing, expected):
+    assert rank(fits, taught, continuing) == expected
 
 
 def test_parse_week_and_signature():

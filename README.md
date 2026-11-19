@@ -41,30 +41,34 @@ When `GCAL_SA_JSON` and `CONFIG_JSON` are set, every new lesson is checked befor
 - **Hard rules** (from `CONFIG_JSON`): centres that are too far, and the latest end time per weekday.
 - **Clashes with Google Calendar,** read through a read-only service account:
   - overlapping a busy event → ❌
-  - events marked *Free* → ignored
-  - all-day busy events (e.g. "Away") → block the whole day
+  - timed events marked *Free* → ignored
+  - **trips** (all-day or 24 h+ events, even if marked Free, which Google does by default) → block every day
+    they touch, including the day you leave and the day you're back
   - events whose title contains one of your `soft_keywords` (e.g. a commitment you'd be willing to cancel) → ⚠️
     flag, not blocking
-  - an event at another place within 60 min before/after → ⚠️ with the gap, so you can judge the travel
-  - the same centre within 30 min (45 on weekends) → 🔗 back-to-back
+  - an event at another place within 30 min before/after → ⚠️ with the gap, so you can judge the travel
 - **Clashes with My Class Schedule on Dash:** lessons already assigned to you, read once a day (~11 page loads).
+  If a class is both on Dash and in your calendar, it's counted once.
 - **Overlap with a lesson you've already bid on** → ❌.
 
-**🔁 covered before:** the class matches (course, centre, weekday, time) a relief lesson on your My Class Schedule.
+**Tags**
+- **🔗 back-to-back:** same centre, gap ≤30 min on weekdays, ≤45 min on weekends and for make-ups.
+  Either next to something already in your schedule, or next to another open lesson that also fits.
+- **🔁 covered before:** matches (course, centre, weekday, time) a relief lesson on your My Class Schedule.
+- **✋** you've already bid on other weeks of this class.
 
-**Ranking:**
-1. 🔁 + all weeks fit
-2. 🔁 + some fit
-3. all fit
-4. at least half fit
-5. the rest
+**Ranking.** Back-to-back is what counts; standalone classes aren't wanted.
+1. 🔗 and (🔁 or ✋)
+2. 🔗
+3. ✋ standalone
+4. fits but standalone
+5. doesn't fit
 
-Classes in groups 1–4 get ⭐ and their own message, with ✅/❌ for each week. The rest go into one
-"Also new, but doesn't fit" summary, with the reason. Having bid on other weeks of the same class counts like
-🔁 for ranking.
+Groups 1–3 get ⭐ and their own message, with ✅/❌ for each week. Everything else goes into one
+"Also new (standalone, or doesn't fit)" summary, with the reason.
 
-The first time this is switched on, you get one **backlog** list of every open class that fits and that you
-haven't bid on yet.
+The first time this is switched on (or when run with `resend_backlog`), you get the **open classes that fit**
+list, one message each for Relief and Holiday Make-Up. ⭐ Best bets come first, then the standalone ones, in date order.
 
 ### Safety and privacy (this repo is public)
 - The session cookie is only sent as a request header. It's never logged or stored.

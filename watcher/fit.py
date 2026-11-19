@@ -23,7 +23,7 @@ class Config:
     too_far: list[str] = field(default_factory=list)
     latest_end: dict[str, str] = field(default_factory=dict)  # {"Tue": "17:00"}
     soft_keywords: list[str] = field(default_factory=list)  # event titles that only flag, never block
-    nearby_minutes: int = 60
+    nearby_minutes: int = 30
     back_to_back_weekday: int = 30
     back_to_back_weekend: int = 45
     calendar_ids: list[str] = field(default_factory=list)
@@ -39,8 +39,13 @@ class Fit:
     ok: bool
     reason: str | None = None  # why it doesn't fit
     flags: list[str] = field(default_factory=list)  # ⚠️ things to judge yourself
-    back_to_back: bool = False
-    b2b_with: list[str] = field(default_factory=list)  # e.g. "after P4 English (Dash) (12:45–2:45pm)"
+    back_to_back: bool = False  # next to something already in my schedule at the same centre
+    b2b_with: list[str] = field(default_factory=list)  # e.g. "after your P3 English (10:00am–12:00pm)"
+    pairs: list[str] = field(default_factory=list)  # other open lessons right next to this one, same centre
+
+    @property
+    def b2b(self) -> bool:
+        return self.ok and (self.back_to_back or bool(self.pairs))
 
 
 def b2b_limit(start: datetime, kind: str, cfg: "Config") -> int:
@@ -50,15 +55,28 @@ def b2b_limit(start: datetime, kind: str, cfg: "Config") -> int:
     return cfg.back_to_back_weekday
 
 
-def _fmt_time(dt: datetime) -> str:
+def _hm(dt: datetime) -> str:
     h = dt.hour % 12 or 12
-    return f"{h}:{dt:%M}{'am' if dt.hour < 12 else 'pm'}"
+    return f"{h}" if dt.minute == 0 else f"{h}:{dt:%M}"
+
+
+def _ap(dt: datetime) -> str:
+    return "am" if dt.hour < 12 else "pm"
+
+
+def _fmt_time(dt: datetime) -> str:
+    return f"{_hm(dt)}{_ap(dt)}"
+
+
+def _fmt_day(dt: datetime) -> str:
+    return f"{dt.day} {dt:%b}"
 
 
 def _span(ev: Event) -> str:
     if ev.all_day:
         return "all day"
-    return f"{_fmt_time(ev.start)}–{_fmt_time(ev.end)}"
+    s, t = ev.start, ev.end
+    return f"{_hm(s)}–{_hm(t)}{_ap(t)}" if _ap(s) == _ap(t) else f"{_fmt_time(s)}–{_fmt_time(t)}"
 
 
 _PLACE_NOISE = {"mind", "stretcher", "cc", "mall", "shopping", "centre", "center", "learning", "the", "@", "-"}
@@ -75,12 +93,28 @@ def _same_place(location: str, centre: str) -> bool:
     return bool(loc and cen) and (cen <= loc or loc <= cen)
 
 
+def is_trip(ev: Event) -> bool:
+    return ev.all_day or ev.end - ev.start >= timedelta(hours=24)
+
+
 def blocks_time(ev: Event) -> bool:
     """Free/busy only matters for ordinary timed events: all-day and multi-day events (trips, 'Away')
     always block, because Google marks all-day events as Free by default."""
-    if ev.all_day or ev.end - ev.start >= timedelta(hours=24):
-        return True
-    return not ev.free
+    return is_trip(ev) or not ev.free
+
+
+def _trip_days(ev: Event) -> tuple[datetime, datetime]:
+    """A trip blocks every day it touches, including the day you leave and the day you're back."""
+    start = datetime.combine(ev.start.date(), time.min)
+    last_day = (ev.end - timedelta(seconds=1)).date() if ev.all_day else ev.end.date()
+    return start, datetime.combine(last_day, time.min) + timedelta(days=1)
+
+
+def _where(location: str) -> str:
+    loc = location.strip()
+    if not loc:
+        return ""
+    return " (online)" if loc.lower() == "online" else f" @ {loc}"
 
 
 def _minutes(td: timedelta) -> int:
@@ -109,27 +143,35 @@ def evaluate(lesson: Lesson, events: list[Event], cfg: Config, pending: list[Les
         if not blocks_time(ev):
             continue
         soft = any(k.lower() in ev.title.lower() for k in cfg.soft_keywords)
+        if is_trip(ev):
+            t_start, t_end = _trip_days(ev)
+            if t_start < end and t_end > start:
+                if soft:
+                    fit.flags.append(f"⚠️ clashes with {ev.title}")
+                    continue
+                last = t_end - timedelta(days=1)
+                when = "all day" if last.date() == t_start.date() else f"{_fmt_day(t_start)}–{_fmt_day(last)}"
+                return Fit(False, f"{ev.title} ({when})")
+            continue
         if ev.start < end and ev.end > start:
             if soft:
                 fit.flags.append(f"⚠️ clashes with {ev.title} ({_span(ev)})")
                 continue
             return Fit(False, f"clash: {ev.title} ({_span(ev)})")
-        if ev.all_day:
-            continue
         if ev.end <= start:
             gap, side = start - ev.end, "after"
         else:
             gap, side = ev.start - end, "before"
         mins = _minutes(gap)
-        if mins > cfg.nearby_minutes:
-            continue
         if _same_place(ev.location, lesson.centre):
             if mins <= limit:
                 fit.back_to_back = True
-                fit.b2b_with.append(f"{side} {ev.title} ({_span(ev)})")
+                fit.b2b_with.append(f"{side} your {ev.title} ({_span(ev)})")
             continue
-        where = f" @ {ev.location}" if ev.location else ""
-        fit.flags.append(f"⚠️ {mins} min {side} {ev.title}{where}")
+        if mins > cfg.nearby_minutes:
+            continue
+        gap_text = f"right {side}" if mins == 0 else f"{mins} min {side}"
+        fit.flags.append(f"⚠️ {gap_text} {ev.title}{_where(ev.location)}")
 
     for other in pending:
         if other.key == lesson.key:
@@ -140,13 +182,17 @@ def evaluate(lesson: Lesson, events: list[Event], cfg: Config, pending: list[Les
     return fit
 
 
-def rank(fits: list[Fit], taught: bool) -> int:
-    """1 = 🔁 + all fit, 2 = 🔁 + some fit, 3 = all fit, 4 = at least half fit, 5 = the rest (no ⭐)."""
-    n_fit = sum(f.ok for f in fits)
-    if n_fit == 0:
+def rank(fits: list[Fit], taught: bool = False, continuing: bool = False) -> int:
+    """I only want classes that sit next to something else.
+
+    1 = back-to-back and (covered before or already bidding on other weeks)
+    2 = back-to-back
+    3 = standalone, but I've already bid on other weeks of this class
+    4 = fits but standalone (listed, no ⭐)
+    5 = doesn't fit
+    """
+    if not any(f.ok for f in fits):
         return 5
-    if taught:
-        return 1 if n_fit == len(fits) else 2
-    if n_fit == len(fits):
-        return 3
-    return 4 if n_fit * 2 >= len(fits) else 5
+    if any(f.b2b for f in fits):
+        return 1 if (taught or continuing) else 2
+    return 3 if continuing else 4

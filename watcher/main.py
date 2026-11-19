@@ -10,7 +10,7 @@ import requests
 from .core import NewItem, apply_scan, due
 from .dash_schedule import fetch_weeks, signature
 from .fetch import Client, makeup_full, relief_full, relief_page1
-from .fit import Config, Event, evaluate, rank
+from .fit import Config, Event, _fmt_time, b2b_limit, evaluate, rank
 from .notify import ClassAlert, Recorder, Telegram, format_alerts, format_backlog, group_new, is_quiet
 from .parse import LayoutChanged, Lesson, SessionExpired
 from .state import FileStore, GitBranchStore
@@ -102,12 +102,15 @@ class Watcher:
         print(f"my-schedule: {len(dash['assigned'])} upcoming lessons, {len(taught)} relief classes covered")
 
     def _events(self, start: datetime, end: datetime) -> list[Event]:
-        events = self.calendar.events(start, end)
+        dash = []
         for a in self.state["dash"].get("assigned", []):
             s, e = datetime.fromisoformat(a["start"]), datetime.fromisoformat(a["end"])
             if s < end and e > start:
-                events.append(Event(f'{a["class_name"]} (Dash)', s, e, a["centre"], source="dash"))
-        return events
+                dash.append(Event(a["class_name"], s, e, a["centre"], source="dash"))
+        on_dash = {(ev.start, ev.end) for ev in dash}
+        # a class that's both on Dash and in my calendar counts once; Dash has the exact centre
+        calendar = [ev for ev in self.calendar.events(start, end) if (ev.start, ev.end) not in on_dash]
+        return calendar + dash
 
     def _pending(self) -> list[Lesson]:
         return [_lesson(r) for r in self.state["lessons"].values()
@@ -120,11 +123,41 @@ class Watcher:
         events = self._events(start, end)
         pending = self._pending()
         taught_sigs = self.state["dash"].get("taught", {})
+
+        # every lesson still on the bulletin, by day and centre, to spot back-to-back pairs
+        slots: dict[tuple[str, str], list[Lesson]] = {}
+        for rec in self.state["lessons"].values():
+            if "gone_since" not in rec and rec.get("status") in ("open", "pending"):
+                les = _lesson(rec)
+                slots.setdefault((les.start[:10], les.centre), []).append(les)
+        memo: dict[str, object] = {}
+
+        def fit_of(les: Lesson):
+            if les.key not in memo:
+                memo[les.key] = evaluate(les, events, self.cfg, pending)
+            return memo[les.key]
+
         for a in alerts:
-            a.fits = [evaluate(i.lesson, events, self.cfg, pending) for i in a.items]
+            a.fits = [fit_of(i.lesson) for i in a.items]
+            for item, f in zip(a.items, a.fits):
+                if not f.ok or f.pairs:
+                    continue
+                les = item.lesson
+                ls, le = datetime.fromisoformat(les.start), datetime.fromisoformat(les.end)
+                for other in slots.get((les.start[:10], les.centre), []):
+                    if other.key == les.key or other.class_code == les.class_code:
+                        continue
+                    os_, oe = datetime.fromisoformat(other.start), datetime.fromisoformat(other.end)
+                    gap = (os_ - le) if os_ >= le else (ls - oe) if oe <= ls else None
+                    limit = max(b2b_limit(ls, les.kind, self.cfg), b2b_limit(os_, other.kind, self.cfg))
+                    if gap is None or gap.total_seconds() / 60 > limit:
+                        continue
+                    mine = other.status == "pending"
+                    if mine or fit_of(other).ok:
+                        f.pairs.append(f"{_fmt_time(os_)} {other.class_name}" + (" (you've bid)" if mine else ""))
             a.taught = any(signature(i.lesson.class_name, i.lesson.centre, datetime.fromisoformat(i.lesson.start))
                            in taught_sigs for i in a.items)
-            a.rank = rank(a.fits, a.taught or bool(a.pending))
+            a.rank = rank(a.fits, a.taught, continuing=bool(a.pending))
 
     def _backlog(self, now: datetime) -> list[str]:
         today = (now + SGT_OFFSET).isoformat()
