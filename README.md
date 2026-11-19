@@ -35,6 +35,37 @@ everything after the bot was offline for a while.
 
 Between 11pm and 7am (SGT) messages are sent **silently** (no sound).
 
+### Schedule fit (⭐ / 🔁)
+When `GCAL_SA_JSON` and `CONFIG_JSON` are set, every new lesson is checked before alerting.
+
+- **Hard rules** (from `CONFIG_JSON`): centres that are too far, and the latest end time per weekday.
+- **Clashes with Google Calendar,** read through a read-only service account:
+  - overlapping a busy event → ❌
+  - events marked *Free* → ignored
+  - all-day busy events (e.g. "Away") → block the whole day
+  - events whose title contains one of your `soft_keywords` (e.g. a commitment you'd be willing to cancel) → ⚠️
+    flag, not blocking
+  - an event at another place within 60 min before/after → ⚠️ with the gap, so you can judge the travel
+  - the same centre within 30 min (45 on weekends) → 🔗 back-to-back
+- **Clashes with My Class Schedule on Dash:** lessons already assigned to you, read once a day (~11 page loads).
+- **Overlap with a lesson you've already bid on** → ❌.
+
+**🔁 covered before:** the class matches (course, centre, weekday, time) a relief lesson on your My Class Schedule.
+
+**Ranking:**
+1. 🔁 + all weeks fit
+2. 🔁 + some fit
+3. all fit
+4. at least half fit
+5. the rest
+
+Classes in groups 1–4 get ⭐ and their own message, with ✅/❌ for each week. The rest go into one
+"Also new, but doesn't fit" summary, with the reason. Having bid on other weeks of the same class counts like
+🔁 for ranking.
+
+The first time this is switched on, you get one **backlog** list of every open class that fits and that you
+haven't bid on yet.
+
 ### Safety and privacy (this repo is public)
 - The session cookie is only sent as a request header. It's never logged or stored.
 - Logs show counts only (`relief N=268 (+1) full 14p lessons=431 new=2 req=15`), never class details.
@@ -54,6 +85,8 @@ Repository secrets (Settings → Secrets and variables → Actions):
 | `TELE_BOT_TOKEN` | Telegram bot token from @BotFather |
 | `TELE_CHAT_ID` | Your Telegram chat id |
 | `STATE_KEY` | Fernet key for the state file. Generate once: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
+| `GCAL_SA_JSON` | *(optional, for ⭐)* JSON key of a Google service account that your calendars are shared with ("See all event details") |
+| `CONFIG_JSON` | *(optional, for ⭐)* schedule rules, e.g. `{"calendar_ids": ["you@gmail.com"], "too_far": ["Some Centre"], "latest_end": {"Tue": "17:00"}, "soft_keywords": ["side job"]}`. Kept as a secret because it describes your availability. |
 
 ### Refreshing the cookie
 Dash logins use an emailed 2FA code, so the bot can't log in by itself. When you get the "session expired"
@@ -78,8 +111,7 @@ message:
   no real class data is committed.
 
 ## Roadmap
-- **Phase 2:** ⭐ for lessons that fit my schedule, checked against Google Calendar (Ottodot clashes are
-  flagged, not blocking), plus 🔁 for classes I've taught before, and alerts ranked by weeks that fit.
+- ~~**Phase 2:** ⭐ schedule fit, 🔁 covered before, ranking, backlog~~ (done, see [Schedule fit](#schedule-fit--))
 - **Phase 3:** tap-to-bid. Telegram **[Bid]** buttons; the bot re-checks the calendar and bids only after my tap.
 - **Phase 4:** track bid timing vs outcome (Accepted/Closed), with weekly stats to tune how often it checks.
 

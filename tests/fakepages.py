@@ -71,4 +71,25 @@ def makeup_page(cards, next_href=None):
             f'</main></body></html>')
 
 
-LOGIN_PAGE = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sign in · Enrollment System</title></head><body>login</body></html>'
+def schedule_week(monday, entries):
+    """entries: list of (day_index 0-6, "5:15 PM - 7:15 PM", class_name, centre, relief: bool)"""
+    from datetime import timedelta
+    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    cols = []
+    for i in range(7):
+        d = monday + timedelta(days=i)
+        cards = "".join(
+            f'<div class="card-zoom-my-schedule-session">'
+            f'{"<span class=badge-zoom-my-schedule-relief>Relief</span>" if relief else ""}'
+            f'<div class="card-zoom-my-schedule-time"> {t} </div>'
+            f'<div class="card-zoom-my-schedule-class-name">{name}</div>'
+            f'<div class="card-zoom-my-schedule-centre">{centre}</div></div>'
+            for (di, t, name, centre, relief) in entries if di == i) or "<p>No classes scheduled.</p>"
+        cols.append(f'<div class="column-zoom-my-schedule-overview-day"><div class="head">{days[i]} {d.day} '
+                    f'{d:%b}</div><div class="list-zoom-my-schedule-overview-entries">{cards}</div></div>')
+    return (f'<html><head><title>My Class Schedule</title></head><body><main>'
+            f'<div class="schedule-legend"><span class="badge-zoom-my-schedule-relief schedule-legend-swatch">Relief</span></div>'
+            f'{"".join(cols)}</main></body></html>')
+
+
+LOGIN_PAGE ='<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sign in · Enrollment System</title></head><body>login</body></html>'
